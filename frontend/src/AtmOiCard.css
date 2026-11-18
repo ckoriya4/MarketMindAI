@@ -1,0 +1,5 @@
+.market-status .atm-oi-detail {width:100%;margin-top:5px;padding-top:5px;border-top:1px solid #193546;text-align:left;font-size:9px;line-height:1.5;}
+.market-status .atm-oi-header {display:flex;justify-content:space-between;gap:4px;font-size:8px;color:#789bb1;}
+.market-status .atm-oi-line {display:grid;grid-template-columns:20px minmax(55px,1fr) auto;gap:5px;margin-top:3px;align-items:baseline;}
+.market-status .atm-oi-line b {font-size:9px;font-weight:700;color:#dce7f2;}
+.market-status .atm-oi-detail small {display:block;font-size:7px;color:#789bb1;margin-top:4px;}

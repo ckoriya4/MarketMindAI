@@ -1,0 +1,16 @@
+.option-action-stack {grid-area:options;display:flex;flex-direction:column;gap:8px;min-width:0;}
+.trade-action-panel {padding:10px;min-width:0;}
+.action-budget {display:flex;gap:6px;align-items:center;font-size:10px;color:#9eb7c9;margin:6px 0 10px;flex-wrap:wrap;}
+.action-budget input {width:110px;}
+.action-score-grid {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;}
+.action-score-card {padding:10px 7px;border:1px solid #723343;border-radius:5px;background:#20151f;display:flex;flex-direction:column;gap:6px;font-size:10px;min-width:0;}
+.action-score-card.green {border-color:#00a982;background:#07352b;}
+.action-score-card.yellow {border-color:#947317;background:#302710;}
+.action-score-card .action-score {font-size:23px;color:#f4d362;}
+.action-score-card.red .action-score {color:#ff899d;}
+.action-score-card.green .action-score {color:#00d6a3;}
+.action-score-card small,.action-panel-note {font-size:9px;color:#91aebf;line-height:1.5;}
+.action-panel-note {margin:7px 0 0;}
+.action-score-card details {font-size:9px;color:#b5cad7;overflow-wrap:anywhere;}
+.action-score-card summary {cursor:pointer;}
+.action-score-card ul {padding-left:12px;line-height:1.7;}

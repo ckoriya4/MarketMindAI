@@ -1,0 +1,114 @@
+.sector-summary {
+    margin-top: 10px;
+    padding-top: 9px;
+    border-top: 1px solid #183448;
+    min-width: 0;
+}
+
+.sector-summary-heading {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 7px;
+    color: #edf5ff;
+    font-size: 10px;
+}
+
+.sector-summary-heading span {
+    font-size: 9px;
+    white-space: nowrap;
+}
+
+.sector-summary-scroll {
+    max-height: 230px;
+    overflow: auto;
+    scrollbar-gutter: stable;
+    scrollbar-width: thin;
+    scrollbar-color: #247d94 #061521;
+}
+
+.sector-summary-scroll table {
+    table-layout: fixed;
+    white-space: normal;
+}
+
+.sector-summary-scroll th {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    background: #091a28;
+    text-align: right;
+}
+
+.sector-summary-scroll th:first-child,
+.sector-summary-scroll td:first-child {
+    width: 48%;
+    text-align: left;
+}
+
+.sector-summary-scroll th:nth-child(2),
+.sector-summary-scroll td:nth-child(2) {
+    width: 25%;
+    text-align: right;
+}
+
+.sector-summary-scroll td {
+    vertical-align: middle;
+}
+
+.sector-summary-name {
+    display: block;
+    color: #eaf3ff;
+    font-weight: 650;
+    overflow-wrap: anywhere;
+}
+
+.sector-summary-scroll small {
+    display: block;
+    color: #7f98af;
+    font-size: 8px;
+    margin-top: 3px;
+    font-weight: 400;
+}
+
+.sector-share-track {
+    height: 3px;
+    margin-top: 5px;
+    border-radius: 2px;
+    background: #102638;
+    overflow: hidden;
+}
+
+.sector-share-track>div {
+    height: 100%;
+    background: #00a6c5;
+    border-radius: inherit;
+}
+
+.sector-summary-note {
+    color: #7f98af;
+    font-size: 8px;
+    line-height: 1.5;
+    margin-top: 7px;
+}
+
+.sector-summary-scroll::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+.sector-summary-scroll::-webkit-scrollbar-track {
+    background: #061521;
+}
+
+.sector-summary-scroll::-webkit-scrollbar-thumb {
+    background: #247d94;
+    border: 2px solid #061521;
+    border-radius: 8px;
+}
+
+.sector-summary-scroll:focus-visible {
+    outline: 1px solid #00b89c;
+    outline-offset: 2px;
+}

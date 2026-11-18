@@ -1,0 +1,174 @@
+"""Existing dashboard API plus Kite-backed stock scanner; no sample quote fallback."""
+import asyncio
+from contextlib import asynccontextmanager
+import csv
+import io
+import os
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+from threading import Lock
+
+import requests
+from dotenv import load_dotenv
+from fastapi import FastAPI, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from typing import Optional
+
+BASE = Path(__file__).resolve().parent
+load_dotenv(BASE / ".env")
+
+from .services.kite_client import kite_manager
+from .services.option_chain import get_dynamic_option_chain, get_upcoming_expiries
+from .services.chart_service import get_chart_data
+from .services.oi_signal import router as oi_signal_router
+from .services.confluence_service import router as confluence_router
+from .services.energy_service import router as energy_router
+from .services.market_overview import router as market_overview_router
+from .services.sector_oi import router as sector_oi_router
+from .services.session_recorder import recorder
+from .services.stock_option_data import collector as stock_oi_collector, scanner_quotes, configure_constituents
+from kiteconnect import KiteConnect
+from kiteconnect.exceptions import TokenException
+
+BASE = Path(__file__).resolve().parent
+load_dotenv(BASE / '.env')
+@asynccontextmanager
+async def lifespan(app):
+    recorder.start()
+    stock_oi_collector.start()
+    try:
+        yield
+    finally:
+        stock_oi_collector.stop()
+        await asyncio.to_thread(recorder.stop)
+
+app = FastAPI(title="MarketMind AI - Trading Intelligence Backend", version="1.0.0", lifespan=lifespan)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+app.include_router(oi_signal_router)
+app.include_router(confluence_router)
+app.include_router(energy_router)
+app.include_router(market_overview_router)
+app.include_router(sector_oi_router)
+
+_lock = Lock()
+_members = []
+_members_at = 0.0
+_snapshot = None
+_snapshot_at = 0.0
+
+
+def constituents():
+    global _members, _members_at
+    if _members and time.monotonic() - _members_at < 21600:
+        return _members
+    path = BASE / 'nifty50.csv'
+    try:
+        if path.exists():
+            content = path.read_text(encoding='utf-8-sig')
+        else:
+            r = requests.get(
+                'https://www.niftyindices.com/IndexConstituent/ind_nifty50list.csv',
+                headers={'User-Agent': 'Mozilla/5.0'}, timeout=12)
+            r.raise_for_status()
+            content = r.content.decode('utf-8-sig')
+        members = [{'symbol': row['Symbol'].strip(),
+                    'sector': row.get('Industry', '').strip()}
+                   for row in csv.DictReader(io.StringIO(content))]
+        if len(members) != 50 or len({m['symbol'] for m in members}) != 50:
+            raise ValueError('Expected 50 unique symbols')
+        _members, _members_at = members, time.monotonic()
+        return _members
+    except Exception:
+        raise HTTPException(503, 'Cannot load NIFTY 50 constituents. Download the official constituent CSV as backend/nifty50.csv.') from None
+
+
+configure_constituents(constituents)
+
+@app.get('/api/market/quotes')
+def live_quotes(symbols: Optional[str] = Query(None)):
+    try:
+        return scanner_quotes()
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(503, 'Actual Kite stock quotes unavailable. Check token and connectivity; no sample rows were substituted.') from None
+
+
+market_state = {"NIFTY_SPOT": 22859.14, "BANKNIFTY_SPOT": 49112.60}
+
+
+class SpotUpdate(BaseModel):
+    symbol: str
+    spot: float
+
+
+@app.get("/")
+def root():
+    return {"app": "MarketMind AI API", "status": "online", "docs_url": "/docs"}
+
+
+@app.get("/api/health")
+def health():
+    return {"status": "healthy", "kite_status": kite_manager.get_status()}
+
+
+@app.get("/api/options/expiries")
+def expiries():
+    return {"expiries": get_upcoming_expiries()}
+
+
+@app.get("/api/options/chain")
+def option_chain(
+    symbol: str = Query("NIFTY"),
+    expiry: Optional[str] = Query(None),
+    num_strikes: int = Query(25, ge=3, le=50),
+    spot: Optional[float] = Query(None),
+):
+    current_spot = spot if spot is not None else market_state.get(symbol.upper(), 22859.14)
+    return get_dynamic_option_chain(
+        symbol=symbol, expiry=expiry, num_strikes=num_strikes, custom_spot=current_spot
+    )
+
+
+@app.post("/api/market/spot")
+def update_spot(payload: SpotUpdate):
+    symbol = payload.symbol.upper()
+    market_state[symbol] = payload.spot
+    return {"message": f"Updated {symbol} spot to {payload.spot}", "new_spot": payload.spot}
+
+
+@app.get("/api/chart/candles")
+def chart_candles(
+    symbol: str = Query("NIFTY"),
+    timeframe: str = Query("5m"),
+    count: int = Query(60, ge=20, le=1000),
+    session: bool = Query(False),
+):
+    return get_chart_data(symbol=symbol, timeframe=timeframe, count=count, session=session)
+
+
+@app.get("/api/chart/tick")
+def chart_tick(symbol: str = Query("NIFTY"), timeframe: str = Query("5m")):
+    data = get_chart_data(symbol=symbol, timeframe=timeframe, count=2)
+    return {"latest_tick": data["latest_tick"], "indicators": data["indicators"]}
+
+# Live weighted OI and four-condition setup (no trade execution).
+from .services.weighted_setup import router as weighted_setup_router
+app.include_router(weighted_setup_router)
+
+from .services.live_crude import router as live_crude_router
+app.include_router(live_crude_router)
+
+
+from .services.trade_setups import router as trade_setup_router
+app.include_router(trade_setup_router)
+

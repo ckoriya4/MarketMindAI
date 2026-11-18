@@ -1,0 +1,179 @@
+.energy-chart-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin: 10px 0 6px;
+}
+
+.energy-chart-toolbar select {
+    max-width: 190px;
+}
+
+.energy-price-chart-wrap {
+    position: relative;
+}
+
+.energy-price-chart {
+    width: 100%;
+    height: 175px;
+}
+
+.energy-chart-message {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    padding: 18px;
+    text-align: center;
+    color: #8da6bd;
+    font-size: 10px;
+    pointer-events: none;
+}
+
+.negative-tag {
+    border-radius: 3px;
+    padding: 4px;
+    background: #531b28;
+    color: #ff9aaa;
+    font-size: 7px;
+    font-weight: 700;
+}
+
+/* Scroll the full ten-day news list; category controls and footer remain visible. */
+.energy-news-scroll {
+    max-height: 230px;
+    overflow-y: scroll;
+    overflow-x: hidden;
+    scrollbar-gutter: stable;
+    scrollbar-width: thin;
+    scrollbar-color: #247d94 #061521;
+}
+
+.energy-news-scroll::-webkit-scrollbar {
+    width: 8px;
+}
+
+.energy-news-scroll::-webkit-scrollbar-track {
+    background: #061521;
+    border-radius: 8px;
+}
+
+.energy-news-scroll::-webkit-scrollbar-thumb {
+    background: #247d94;
+    border: 2px solid #061521;
+    border-radius: 8px;
+}
+
+.energy-news-scroll::-webkit-scrollbar-thumb:hover {
+    background: #00b89c;
+}
+
+.energy-news-scroll .news-row span {
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+.energy-news-scroll:focus-visible {
+    outline: 1px solid #00b89c;
+    outline-offset: 2px;
+}
+
+.news .news-filters {
+    flex-wrap: wrap;
+}
+
+.fx-news-detail {
+    display: block;
+    color: #7f98af;
+    font-size: 7px;
+    line-height: 1.5;
+    margin-top: 3px;
+}
+
+.news .news-row time {
+    min-width: 59px;
+    font-size: 9px;
+    line-height: 1.5;
+}
+
+.news-factor-summary {
+    border-top: 1px solid #1b3447;
+    margin-top: 8px;
+    padding-top: 8px;
+    font-size: 10px;
+}
+
+.news-factor-summary small {
+    display: block;
+    color: #819bb0;
+    margin-top: 5px;
+    line-height: 1.4;
+}
+
+.news-share-row {
+    display: grid;
+    grid-template-columns: minmax(90px, 1fr) auto auto auto;
+    gap: 8px;
+    padding: 5px 0;
+    border-bottom: 1px solid #173040;
+    align-items: center;
+}
+
+.news-factor-scroll {
+    max-height: 130px;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: #1e8198 #071b27;
+}
+
+/* Override App.css's original 30px date column, including its mobile rule. */
+.news .energy-news-scroll .news-row {
+    grid-template-columns: 70px minmax(0, 1fr) auto;
+    gap: 9px;
+    align-items: start;
+}
+
+.news .energy-news-scroll .news-row time {
+    display: block;
+    min-width: 0;
+    width: auto;
+    white-space: nowrap;
+    font-size: 9px;
+    line-height: 1.6;
+}
+
+.news .energy-news-scroll .news-row>span {
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+.news .energy-news-scroll .news-row a {
+    display: block;
+}
+
+.news-factor-detail>summary {
+    cursor: pointer;
+}
+
+.news-factor-detail>summary .news-share-row {
+    display: inline-grid;
+    width: calc(100% - 14px);
+    vertical-align: middle;
+}
+
+.news-sector-detail {
+    padding: 6px 8px;
+    color: #a6bfd0;
+    line-height: 1.6;
+    font-size: 10px;
+}
+
+.news-sector-detail ul {
+    padding-left: 16px;
+    margin: 4px 0;
+}
+
+.news-sector-detail b {
+    color: #d8e8f5;
+}

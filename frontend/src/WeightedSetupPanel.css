@@ -1,0 +1,115 @@
+.dashboard>.weighted-setup {
+    grid-column: 1 / -1;
+    grid-row: auto;
+    min-width: 0;
+}
+
+.weighted-banner {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    flex-wrap: wrap;
+    padding: 12px;
+    border: 1px solid;
+    border-radius: 5px;
+    font-size: 12px;
+}
+
+.weighted-banner.green {
+    color: #26e3b1;
+    background: #063c32;
+    border-color: #00b88f;
+}
+
+.weighted-banner.yellow {
+    color: #ffda75;
+    background: #382b0e;
+    border-color: #a88018;
+}
+
+.weighted-banner.red {
+    color: #ffa0ae;
+    background: #341820;
+    border-color: #9a3046;
+}
+
+.weighted-note {
+    color: #8ca8bd;
+    font-size: 10px;
+    line-height: 1.5;
+    margin: 8px 0;
+}
+
+.weighted-metrics,
+.weighted-checks {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 8px;
+    margin: 10px 0;
+    font-size: 11px;
+}
+
+.weighted-metrics span,
+.weighted-checks>div {
+    border: 1px solid #18394a;
+    padding: 10px;
+    border-radius: 4px;
+}
+
+.weighted-metrics b {
+    display: block;
+    margin-top: 4px;
+}
+
+.weighted-checks .passed {
+    color: #00d6a3;
+}
+
+.weighted-checks .waiting {
+    color: #9aafbd;
+}
+
+.weighted-table-scroll {
+    overflow: auto;
+    max-height: 230px;
+    scrollbar-width: thin;
+    scrollbar-color: #237d94 #061521;
+}
+
+.weighted-table-scroll table {
+    width: 100%;
+    min-width: 440px;
+    font-size: 10px;
+}
+
+.weighted-table-scroll th {
+    position: sticky;
+    top: 0;
+    background: #0a202d;
+}
+
+.dashboard {
+    grid-template-areas: "scanner chart options trading" "signal crude news trading" "weighted weighted weighted weighted";
+}
+
+.dashboard>.weighted-setup {
+    grid-area: weighted;
+}
+
+@media(max-width:1250px) {
+    .dashboard {
+        grid-template-areas: "scanner chart options" "signal crude news" "trading trading trading" "weighted weighted weighted";
+    }
+}
+
+@media(max-width:850px) {
+    .dashboard {
+        grid-template-areas: "scanner scanner" "chart chart" "options options" "signal crude" "news news" "trading trading" "weighted weighted";
+    }
+}
+
+@media(max-width:560px) {
+    .dashboard {
+        grid-template-areas: "scanner" "chart" "options" "signal" "crude" "news" "trading" "weighted";
+    }
+}

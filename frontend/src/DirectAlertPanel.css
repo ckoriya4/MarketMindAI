@@ -1,0 +1,11 @@
+.option-action-stack {grid-area:options;display:flex;flex-direction:column;gap:8px;min-width:0;}
+.direct-alert-panel {min-width:0;padding:10px;}
+.direct-alert-banner {display:flex;flex-direction:column;gap:6px;padding:11px;border:1px solid #7b6328;background:#2a2414;color:#ffce55;border-radius:5px;font-size:12px;}
+.direct-alert-banner.call {background:#073d30;border-color:#00b98a;color:#37e8b4;}
+.direct-alert-banner.put {background:#411b28;border-color:#dc3d60;color:#ff91a7;}
+.direct-alert-banner span {font-size:10px;line-height:1.5;}
+.direct-alert-rules {display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:10px 0;font-size:10px;}
+.direct-alert-rules>div {display:flex;flex-direction:column;gap:6px;border:1px solid #1b3d4f;padding:8px;border-radius:4px;}
+.direct-alert-note {font-size:9px;color:#91aebf;line-height:1.6;margin:8px 0;overflow-wrap:anywhere;}
+.direct-alert-last {display:flex;flex-direction:column;gap:6px;border:1px solid #33516b;padding:9px;margin:10px 0;font-size:10px;}
+.direct-alert-last small {font-size:9px;color:#9ab2c3;line-height:1.5;}
