@@ -1,6 +1,8 @@
+
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { Activity, Bell, BrainCircuit, RefreshCw, Search, ShieldCheck, SlidersHorizontal, UserRound, Volume2 } from "lucide-react";
 import "./App.css";
+import { apiUrl } from "./config/api";
 import OISignalChart from "./OISignalChart";
 import SectorSummary from "./SectorSummary";
 import LiveMarketStrip from "./LiveMarketStrip";
@@ -75,7 +77,6 @@ interface ChartIndicators {
   instrument?: string;
 }
 
-
 function PanelTitle({ children, icon }: { children: React.ReactNode; icon?: React.ReactNode }) {
   return <div className="panel-title"><span>{icon}{children}</span></div>;
 }
@@ -119,12 +120,15 @@ export default function App() {
       const requestController = new AbortController();
       controller = requestController;
       const timeout = setTimeout(() => requestController.abort(), 25000);
+
       try {
         const response = await fetch(
-          "http://127.0.0.1:8000/api/market/quotes",
+          apiUrl("/api/market/quotes"),
           { signal: requestController.signal }
         );
+
         const data = await response.json();
+
         if (!response.ok) {
           throw new Error(
             typeof data.detail === "string"
@@ -132,13 +136,19 @@ export default function App() {
               : `Stock API error: ${response.status}. Check /api/market/quotes in your browser.`
           );
         }
-        if (!Array.isArray(data.quotes) || data.quotes.length === 0 ||
+
+        if (
+          !Array.isArray(data.quotes) ||
+          data.quotes.length === 0 ||
           !data.quotes.every((row: unknown) =>
-            Array.isArray(row) && row.length === 8 &&
+            Array.isArray(row) &&
+            row.length === 8 &&
             row.every((value: unknown) => typeof value === "string")
-          )) {
+          )
+        ) {
           throw new Error("Stock API returned no valid scanner rows");
         }
+
         if (active) {
           setStocks(data.quotes);
           setStockMetadata(data.metadata || {});
@@ -150,6 +160,7 @@ export default function App() {
           const message = error instanceof Error && error.name === "AbortError"
             ? "Stock quote request timed out. Check the backend."
             : error instanceof Error ? error.message : "Stock quotes unavailable";
+
           setStockQuoteError(message);
           console.error("Scanner quotes failed:", error);
           setNotice(message);
@@ -161,6 +172,7 @@ export default function App() {
     };
 
     void fetchQuotes();
+
     return () => {
       active = false;
       clearTimeout(timer);
@@ -175,65 +187,106 @@ export default function App() {
   const filtered = useMemo(() => {
     const percentage = (row: string[]) => {
       const raw = stockMetadata[row[0]]?.change_pct;
+
       if (typeof raw === "number" && Number.isFinite(raw)) return raw;
       if (row[2].trim() === "—" || !row[2].trim()) return null;
+
       const parsed = Number(row[2].replace(/[%+,]/g, "").trim());
       return Number.isFinite(parsed) ? parsed : null;
     };
+
     return stocks.filter(row =>
       row[0].toLowerCase().includes(search.trim().toLowerCase()) &&
       (scannerSector === "All Sectors" || stockMetadata[row[0]]?.sector?.trim() === scannerSector)
     ).sort((a, b) => {
       const av = percentage(a), bv = percentage(b);
+
       if (av === null) return bv === null ? a[0].localeCompare(b[0]) : 1;
       if (bv === null) return -1;
+
       const difference = scannerSort === "Strongest" ? bv - av : av - bv;
       return difference || a[0].localeCompare(b[0]);
     });
   }, [stocks, stockMetadata, search, scannerSector, scannerSort]);
-  const notify = (s: string) => { setNotice(s); window.setTimeout(() => setNotice(""), 2600); };
+
+  const notify = (s: string) => {
+    setNotice(s);
+    window.setTimeout(() => setNotice(""), 2600);
+  };
 
   // Fetch dynamic option chain from FastAPI backend
   const fetchOptionChain = useCallback(async (exp?: string, rangeCount: number = strikeRange) => {
     const requestId = ++chainRequest.current;
+
     try {
-      const url = new URL("http://127.0.0.1:8000/api/options/chain");
+      const url = new URL(
+        apiUrl("/api/options/chain"),
+        window.location.origin
+      );
+
       url.searchParams.set("symbol", "NIFTY");
+
       const targetExp = exp || selectedExpiry;
       if (targetExp) url.searchParams.set("expiry", targetExp);
+
       url.searchParams.set("num_strikes", String(rangeCount));
 
-      const res = await fetch(url.toString(), { signal: AbortSignal.timeout(25000) });
+      const res = await fetch(url.toString(), {
+        signal: AbortSignal.timeout(25000)
+      });
+
       if (requestId !== chainRequest.current) return;
+
       if (res.ok) {
         const data: OptionChainData = await res.json();
+
         if (requestId !== chainRequest.current) return;
+
         setChainError("");
         setChainData(data);
+
         if (!selectedExpiry && data.selected_expiry) {
           setSelectedExpiry(data.selected_expiry);
         }
+
         setBackendOnline(true);
       } else {
         const result = await res.json();
+
         if (requestId !== chainRequest.current) return;
+
         setChainData(null);
-        setChainError(typeof result.detail === "string" ? result.detail : "Live option chain unavailable");
-        if (res.status === 422 && selectedExpiry) setSelectedExpiry("");
+
+        setChainError(
+          typeof result.detail === "string"
+            ? result.detail
+            : "Live option chain unavailable"
+        );
+
+        if (res.status === 422 && selectedExpiry) {
+          setSelectedExpiry("");
+        }
+
         setBackendOnline(false);
       }
     } catch {
       if (requestId !== chainRequest.current) return;
-      setChainData(null); setChainError("Live option chain request failed or timed out.");
+
+      setChainData(null);
+      setChainError("Live option chain request failed or timed out.");
       setBackendOnline(false);
     }
   }, [selectedExpiry, strikeRange]);
 
   const handleRefresh = async () => {
     setIsRefreshing(true);
+
     const exp = selectedExpiry || chainData?.selected_expiry;
+
     notify(`Refreshed option chain (${exp || "NIFTY"}).`);
+
     await fetchOptionChain(exp, strikeRange);
+
     setTimeout(() => {
       setIsRefreshing(false);
     }, 600);
@@ -242,25 +295,77 @@ export default function App() {
   useEffect(() => {
     let active = true;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const poll = async () => { await fetchOptionChain(selectedExpiry, strikeRange); if (active) timer = setTimeout(poll, 6000); };
+
+    const poll = async () => {
+      await fetchOptionChain(selectedExpiry, strikeRange);
+
+      if (active) {
+        timer = setTimeout(poll, 6000);
+      }
+    };
+
     void poll();
-    return () => { active = false; clearTimeout(timer); chainRequest.current++; };
+
+    return () => {
+      active = false;
+      clearTimeout(timer);
+      chainRequest.current++;
+    };
   }, [fetchOptionChain, selectedExpiry, strikeRange]);
 
   return <div className="app">
     <header className="topbar">
-      <div className="brand"><div className="brand-icon"><BrainCircuit size={25} /></div><div><div className="brand-name">MarketMind AI</div><div className="brand-sub">Dynamic ATM • OI &amp; PCR • Support/Resistance • AI Trading</div></div></div>
-      <nav>{navItems.map(n => <button key={n} className={active === n ? "nav active" : "nav"} onClick={() => setActive(n)}>{n}</button>)}</nav>
-      <label className="global-search"><Search size={14} /><input placeholder="Search stock / index" value={search} onChange={e => setSearch(e.target.value)} /></label>
-      <button className="icon-button" onClick={() => notify("Alerts active.")}><Bell size={17} /><i>3</i></button><button className="avatar"><UserRound size={17} /></button>
+      <div className="brand">
+        <div className="brand-icon"><BrainCircuit size={25} /></div>
+        <div>
+          <div className="brand-name">MarketMind AI</div>
+          <div className="brand-sub">Dynamic ATM • OI &amp; PCR • Support/Resistance • AI Trading</div>
+        </div>
+      </div>
+
+      <nav>
+        {navItems.map(n => (
+          <button
+            key={n}
+            className={active === n ? "nav active" : "nav"}
+            onClick={() => setActive(n)}
+          >
+            {n}
+          </button>
+        ))}
+      </nav>
+
+      <label className="global-search">
+        <Search size={14} />
+        <input
+          placeholder="Search stock / index"
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+        />
+      </label>
+
+      <button className="icon-button" onClick={() => notify("Alerts active.")}>
+        <Bell size={17} /><i>3</i>
+      </button>
+
+      <button className="avatar"><UserRound size={17} /></button>
     </header>
 
     <div className="demo-banner">
-      <b><Activity size={13} /> {backendOnline ? "BACKEND ONLINE" : "DEMO / OFFLINE"}</b>
+      <b>
+        <Activity size={13} />
+        {backendOnline ? "BACKEND ONLINE" : "DEMO / OFFLINE"}
+      </b>
+
       {backendOnline && chainData ? (
-        <span>Connected to FastAPI (Port 8000) &bull; Mode: <b>{chainData.data_mode}</b> &bull; Dynamic ATM Active ({chainData.atm_strike})</span>
+        <span>
+          Connected to FastAPI (Port 8000) &bull; Mode: <b>{chainData.data_mode}</b>
+          &bull; Dynamic ATM Active ({chainData.atm_strike})
+        </span>
       ) : (
-        <span>Starting backend connection to 127.0.0.1:8000... Run backend server to stream live data.</span>
+        <span>
+          Starting backend connection to 127.0.0.1:8000... Run backend server to stream live data.
+        </span>
       )}
     </div>
 
@@ -269,21 +374,70 @@ export default function App() {
     <main className="dashboard">
       <section className="panel scanner">
         <PanelTitle icon={<span className="live-dot" />}>NIFTY 50 STOCK SCANNER</PanelTitle>
+
         <div className="scanner-tools">
-          <label className="field"><Search size={13} /><input placeholder="Search stock..." value={search} onChange={e => setSearch(e.target.value)} /></label>
-          <select aria-label="Filter stocks by sector" value={scannerSector} onChange={e => setScannerSector(e.target.value)}><option>All Sectors</option>{scannerSectors.map(sector => <option key={sector} value={sector}>{sector}</option>)}</select>
-          <select aria-label="Sort stocks by percentage change" value={scannerSort} onChange={e => setScannerSort(e.target.value)}><option>Strongest</option><option>Weakest</option></select>
-          <button className="icon-button small-btn" title="Reset scanner filters" aria-label="Reset scanner filters" onClick={() => { setSearch(""); setScannerSector("All Sectors"); setScannerSort("Strongest"); }}><SlidersHorizontal size={14} /></button>
+          <label className="field">
+            <Search size={13} />
+            <input
+              placeholder="Search stock..."
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+            />
+          </label>
+
+          <select
+            aria-label="Filter stocks by sector"
+            value={scannerSector}
+            onChange={e => setScannerSector(e.target.value)}
+          >
+            <option>All Sectors</option>
+            {scannerSectors.map(sector => (
+              <option key={sector} value={sector}>{sector}</option>
+            ))}
+          </select>
+
+          <select
+            aria-label="Sort stocks by percentage change"
+            value={scannerSort}
+            onChange={e => setScannerSort(e.target.value)}
+          >
+            <option>Strongest</option>
+            <option>Weakest</option>
+          </select>
+
+          <button
+            className="icon-button small-btn"
+            title="Reset scanner filters"
+            aria-label="Reset scanner filters"
+            onClick={() => {
+              setSearch("");
+              setScannerSector("All Sectors");
+              setScannerSort("Strongest");
+            }}
+          >
+            <SlidersHorizontal size={14} />
+          </button>
         </div>
+
         <div className="table-scroll">
           <table>
-            <thead><tr><th>#</th><th>STOCK</th><th>LTP</th><th>% CHG</th><th>CALL OI</th><th>PUT OI</th><th>PCR</th><th>TREND</th><th>SIGNAL</th></tr></thead>
+            <thead>
+              <tr>
+                <th>#</th><th>STOCK</th><th>LTP</th><th>% CHG</th>
+                <th>CALL OI</th><th>PUT OI</th><th>PCR</th><th>TREND</th><th>SIGNAL</th>
+              </tr>
+            </thead>
+
             <tbody>
               {filtered.map((s, i) => (
                 <tr key={s[0]}>
-                  <td>{i + 1}</td><td className="symbol">{s[0]}</td><td>{s[1]}</td>
+                  <td>{i + 1}</td>
+                  <td className="symbol">{s[0]}</td>
+                  <td>{s[1]}</td>
                   <td className={s[2].startsWith("+") ? "positive" : "negative"}>{s[2]}</td>
-                  <td>{s[3]}</td><td>{s[4]}</td><td>{s[5]}</td>
+                  <td>{s[3]}</td>
+                  <td>{s[4]}</td>
+                  <td>{s[5]}</td>
                   <td className={s[6] === "Bullish" ? "positive" : s[6] === "Bearish" ? "negative" : "amber"}>{s[6]}</td>
                   <td><b className={`pill ${String(s[7]).toLowerCase()}`}>{s[7]}</b></td>
                 </tr>
@@ -291,35 +445,73 @@ export default function App() {
             </tbody>
           </table>
         </div>
-        <div className="muted tiny foot">{filtered.length} of {stocks.length} instruments · {scannerSort}</div>
-        <SectorSummary stocks={stocks} metadata={stockMetadata} fetchedAt={stockSnapshotAt} error={stockQuoteError} />
+
+        <div className="muted tiny foot">
+          {filtered.length} of {stocks.length} instruments · {scannerSort}
+        </div>
+
+        <SectorSummary
+          stocks={stocks}
+          metadata={stockMetadata}
+          fetchedAt={stockSnapshotAt}
+          error={stockQuoteError}
+        />
       </section>
 
       <section className="panel chart-panel">
-        <OISignalChart expiry={selectedExpiry || chainData?.selected_expiry || ""} numStrikes={strikeRange} />
-        <PanelTitle icon={<span className="live-dot" style={{ background: candleStatus.startsWith("Kite") ? undefined : "#f5b82e" }} />}>NIFTY 50 — Candles</PanelTitle>
+        <OISignalChart
+          expiry={selectedExpiry || chainData?.selected_expiry || ""}
+          numStrikes={strikeRange}
+        />
+
+        <PanelTitle icon={
+          <span
+            className="live-dot"
+            style={{ background: candleStatus.startsWith("Kite") ? undefined : "#f5b82e" }}
+          />
+        }>
+          NIFTY 50 — Candles
+        </PanelTitle>
+
         <div className="toolbar">
           {["1m", "3m", "5m", "15m", "30m", "1H", "1D", "W"].map(t => (
-            <button key={t} className={timeframe === t ? "selected" : ""} onClick={() => setTimeframe(t)}>{t}</button>
+            <button
+              key={t}
+              className={timeframe === t ? "selected" : ""}
+              onClick={() => setTimeframe(t)}
+            >
+              {t}
+            </button>
           ))}
         </div>
+
         <div className="chart-meta">
           <strong>{chartIndicators?.instrument || "NIFTY"} · {timeframe}</strong>
+
           <span className={(chartIndicators?.change ?? 0) >= 0 ? "positive" : "negative"}>
             ● {chartIndicators ? chartIndicators.ltp.toLocaleString("en-IN", { minimumFractionDigits: 2 }) : "—"}
             {" "}
-            {chartIndicators?.change != null ? `${chartIndicators.change >= 0 ? "+" : ""}${chartIndicators.change} (${chartIndicators.change_pct}%)` : ""}
+            {chartIndicators?.change != null
+              ? `${chartIndicators.change >= 0 ? "+" : ""}${chartIndicators.change} (${chartIndicators.change_pct}%)`
+              : ""}
           </span>
         </div>
-        <IndicatorCandleChart timeframe={timeframe} onIndicatorsUpdate={setChartIndicators} onStatusUpdate={setCandleStatus} />
-        <div className="oi-caption" role="status">{candleStatus}</div>
 
+        <IndicatorCandleChart
+          timeframe={timeframe}
+          onIndicatorsUpdate={setChartIndicators}
+          onStatusUpdate={setCandleStatus}
+        />
+
+        <div className="oi-caption" role="status">{candleStatus}</div>
       </section>
 
       {/* DYNAMIC OPTION CHAIN & OI / PCR / SUPPORT & RESISTANCE (FEATURES 1 & 2) */}
       <section className="panel options">
         <PanelTitle icon={<span className="live-dot" />}>
-          OPTION CHAIN — {chainData?.selected_expiry ? `${chainData.selected_expiry} (${chainData.days_to_expiry ?? 0} DTE)` : "NIFTY 50"}
+          OPTION CHAIN — {chainData?.selected_expiry
+            ? `${chainData.selected_expiry} (${chainData.days_to_expiry ?? 0} DTE)`
+            : "NIFTY 50"}
         </PanelTitle>
 
         {/* Dynamic Controls: Expiry & Strike Range Selectors */}
@@ -332,11 +524,14 @@ export default function App() {
             }}
           >
             {chainData?.available_expiries ? (
-              chainData.available_expiries.map(exp => <option key={exp} value={exp}>{exp}</option>)
+              chainData.available_expiries.map(exp => (
+                <option key={exp} value={exp}>{exp}</option>
+              ))
             ) : (
               <option>Loading expiries...</option>
             )}
           </select>
+
           <select
             value={strikeRange}
             onChange={e => {
@@ -351,6 +546,7 @@ export default function App() {
             <option value={25}>±25 Strikes</option>
             <option value={50}>±50 Strikes</option>
           </select>
+
           <button
             className="refresh-btn"
             onClick={handleRefresh}
@@ -364,12 +560,26 @@ export default function App() {
 
         <div className="segmented">
           {["Combined", "Calls", "Puts"].map(x => (
-            <button key={x} className={chainMode === x ? "selected" : ""} onClick={() => setChainMode(x)}>{x}</button>
+            <button
+              key={x}
+              className={chainMode === x ? "selected" : ""}
+              onClick={() => setChainMode(x)}
+            >
+              {x}
+            </button>
           ))}
         </div>
 
-        <div className="muted tiny" role="status">{chainError || (chainData ? `${chainData.data_mode} · ${new Date(chainData.timestamp).toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata" })} IST` : "Waiting for Kite quotes…")}</div>
-        <div className="muted tiny">OI Chg%: versus previous trading-session close. Dash = baseline loading/unavailable.</div>
+        <div className="muted tiny" role="status">
+          {chainError || (chainData
+            ? `${chainData.data_mode} · ${new Date(chainData.timestamp).toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata" })} IST`
+            : "Waiting for Kite quotes…")}
+        </div>
+
+        <div className="muted tiny">
+          OI Chg%: versus previous trading-session close. Dash = baseline loading/unavailable.
+        </div>
+
         {/* Dynamic Strikes Table */}
         <div className="table-scroll">
           <table className="option-table">
@@ -383,19 +593,45 @@ export default function App() {
                 <th>PCR / OI DEPTH</th>
               </tr>
             </thead>
+
             <tbody>
               {chainData?.strikes ? (
                 chainData.strikes.map(s => {
-                  const rowClass = s.is_atm ? "atm" : s.is_resistance ? "resistance" : s.is_support ? "support" : "";
+                  const rowClass = s.is_atm
+                    ? "atm"
+                    : s.is_resistance
+                      ? "resistance"
+                      : s.is_support
+                        ? "support"
+                        : "";
+
                   return (
                     <tr key={s.strike} className={rowClass}>
                       {/* Call Side */}
                       {chainMode !== "Puts" && (
                         <td className={`oi-cell ${s.call_oi_chg == null ? "muted" : s.call_oi_chg > 0 ? "positive" : s.call_oi_chg < 0 ? "negative" : "muted"}`}>
-                          <span>{s.call_oi_formatted} <small>({(s.call_oi_pct_chg ?? 0) > 0 ? "+" : ""}{s.call_oi_pct_chg == null ? "—" : `${s.call_oi_pct_chg}%`})</small></span>
-                          <div className="oi-bar-wrap"><div className="oi-bar call" style={{ width: `${s.call_bar_pct}%`, background: s.call_oi_chg == null || s.call_oi_chg === 0 ? "#698494" : s.call_oi_chg > 0 ? "#00d6a3" : "#ff4566" }} /></div>
+                          <span>
+                            {s.call_oi_formatted}{" "}
+                            <small>
+                              ({(s.call_oi_pct_chg ?? 0) > 0 ? "+" : ""}
+                              {s.call_oi_pct_chg == null ? "—" : `${s.call_oi_pct_chg}%`})
+                            </small>
+                          </span>
+
+                          <div className="oi-bar-wrap">
+                            <div
+                              className="oi-bar call"
+                              style={{
+                                width: `${s.call_bar_pct}%`,
+                                background: s.call_oi_chg == null || s.call_oi_chg === 0
+                                  ? "#698494"
+                                  : s.call_oi_chg > 0 ? "#00d6a3" : "#ff4566"
+                              }}
+                            />
+                          </div>
                         </td>
                       )}
+
                       {chainMode !== "Puts" && <td>{s.call_ltp?.toFixed(2) ?? "—"}</td>}
 
                       {/* Strike Price with Dynamic Badges */}
@@ -408,18 +644,51 @@ export default function App() {
 
                       {/* Put Side */}
                       {chainMode !== "Calls" && <td>{s.put_ltp?.toFixed(2) ?? "—"}</td>}
+
                       {chainMode !== "Calls" && (
                         <td className={`oi-cell ${s.put_oi_chg == null ? "muted" : s.put_oi_chg > 0 ? "positive" : s.put_oi_chg < 0 ? "negative" : "muted"}`}>
-                          <span>{s.put_oi_formatted} <small>({(s.put_oi_pct_chg ?? 0) > 0 ? "+" : ""}{s.put_oi_pct_chg == null ? "—" : `${s.put_oi_pct_chg}%`})</small></span>
-                          <div className="oi-bar-wrap"><div className="oi-bar put" style={{ width: `${s.put_bar_pct}%`, background: s.put_oi_chg == null || s.put_oi_chg === 0 ? "#698494" : s.put_oi_chg > 0 ? "#00d6a3" : "#ff4566" }} /></div>
+                          <span>
+                            {s.put_oi_formatted}{" "}
+                            <small>
+                              ({(s.put_oi_pct_chg ?? 0) > 0 ? "+" : ""}
+                              {s.put_oi_pct_chg == null ? "—" : `${s.put_oi_pct_chg}%`})
+                            </small>
+                          </span>
+
+                          <div className="oi-bar-wrap">
+                            <div
+                              className="oi-bar put"
+                              style={{
+                                width: `${s.put_bar_pct}%`,
+                                background: s.put_oi_chg == null || s.put_oi_chg === 0
+                                  ? "#698494"
+                                  : s.put_oi_chg > 0 ? "#00d6a3" : "#ff4566"
+                              }}
+                            />
+                          </div>
                         </td>
                       )}
 
-                      {/* OI Depth Visual Bar (As in Image 2) */}
+                      {/* OI Depth Visual Bar */}
                       <td>
-                        <div style={{ display: "flex", gap: "2px", alignItems: "center", justifyContent: "center" }}>
-                          <span style={{ fontSize: "7px", color: "#8da6bd" }}>{s.strike_pcr ?? "—"}</span>
-                          <div style={{ width: "35px", height: "4px", background: "#061826", borderRadius: "2px", display: "flex", overflow: "hidden" }}>
+                        <div style={{
+                          display: "flex",
+                          gap: "2px",
+                          alignItems: "center",
+                          justifyContent: "center"
+                        }}>
+                          <span style={{ fontSize: "7px", color: "#8da6bd" }}>
+                            {s.strike_pcr ?? "—"}
+                          </span>
+
+                          <div style={{
+                            width: "35px",
+                            height: "4px",
+                            background: "#061826",
+                            borderRadius: "2px",
+                            display: "flex",
+                            overflow: "hidden"
+                          }}>
                             <div style={{ width: `${s.call_bar_pct / 2}%`, background: "#ff4566" }} />
                             <div style={{ width: `${s.put_bar_pct / 2}%`, background: "#00d6a3" }} />
                           </div>
@@ -429,7 +698,11 @@ export default function App() {
                   );
                 })
               ) : (
-                <tr><td colSpan={6} style={{ textAlign: "center", padding: "15px" }}>{chainError || "Loading live option chain…"}</td></tr>
+                <tr>
+                  <td colSpan={6} style={{ textAlign: "center", padding: "15px" }}>
+                    {chainError || "Loading live option chain…"}
+                  </td>
+                </tr>
               )}
             </tbody>
           </table>
@@ -437,7 +710,11 @@ export default function App() {
 
         {/* OI & PCR Summary */}
         <div className="option-summary">
-          <div><span>Total Call OI</span><b className="negative">{chainData?.total_call_oi ?? "—"}</b></div>
+          <div>
+            <span>Total Call OI</span>
+            <b className="negative">{chainData?.total_call_oi ?? "—"}</b>
+          </div>
+
           <div>
             <span>PCR</span>
             <b>{chainData?.pcr ?? "—"}</b>
@@ -445,23 +722,39 @@ export default function App() {
               {chainData ? chainData.pcr_bias : "Neutral"}
             </small>
           </div>
-          <div><span>Total Put OI</span><b className="positive">{chainData?.total_put_oi ?? "—"}</b></div>
+
+          <div>
+            <span>Total Put OI</span>
+            <b className="positive">{chainData?.total_put_oi ?? "—"}</b>
+          </div>
         </div>
 
-        {/* Support & Resistance Levels (Feature 2) */}
+        {/* Support & Resistance Levels */}
         <div className="max-oi" title={chainData?.level_scope}>
-          <div>Major Resistance (R1): <b style={{ color: "#ff8ca0" }}>{chainData?.resistance_strike ?? "—"}</b> ({chainData?.resistance_oi})</div>
-          <div>Major Support (S1): <b style={{ color: "#38f1c1" }}>{chainData?.support_strike ?? "—"}</b> ({chainData?.support_oi})</div>
+          <div>
+            Major Resistance (R1):{" "}
+            <b style={{ color: "#ff8ca0" }}>{chainData?.resistance_strike ?? "—"}</b>
+            {" "}({chainData?.resistance_oi})
+          </div>
+
+          <div>
+            Major Support (S1):{" "}
+            <b style={{ color: "#38f1c1" }}>{chainData?.support_strike ?? "—"}</b>
+            {" "}({chainData?.support_oi})
+          </div>
         </div>
 
-        {/* A/B Signal Confluence Score (Feature 2) */}
+        {/* A/B Signal Confluence Score */}
         {chainData?.ab_score && (
           <div className="ab-score-box" title={chainData?.score_method}>
             <div>
               <span>OI Balance Score: </span>
               <strong>{chainData.ab_score.score ?? "—"} / 100</strong>
-              <span style={{ marginLeft: "5px", color: "#8da6bd" }}>({chainData.ab_score.trend})</span>
+              <span style={{ marginLeft: "5px", color: "#8da6bd" }}>
+                ({chainData.ab_score.trend})
+              </span>
             </div>
+
             <b className={`ab-score-pill ${chainData.ab_score.color}`}>
               {chainData.ab_score.recommendation}
             </b>
@@ -471,18 +764,117 @@ export default function App() {
 
       <section className="panel trading">
         <PanelTitle>TRADING CONTROL</PanelTitle>
-        <div className="segmented">{["Manual", "Auto (AI)", "Paper"].map(m => <button key={m} className={tradeMode === m ? "selected" : ""} onClick={() => { setTradeMode(m); if (m === "Auto (AI)") setAuto(false) }}>{m}</button>)}</div>
+
+        <div className="segmented">
+          {["Manual", "Auto (AI)", "Paper"].map(m => (
+            <button
+              key={m}
+              className={tradeMode === m ? "selected" : ""}
+              onClick={() => {
+                setTradeMode(m);
+                if (m === "Auto (AI)") setAuto(false);
+              }}
+            >
+              {m}
+            </button>
+          ))}
+        </div>
+
         <h3>Auto Trading Settings</h3>
-        <div className="setting-row"><span>Enable Auto Trade</span><button className={`toggle ${auto ? "on" : ""}`} onClick={() => { setAuto(!auto); if (!auto) notify("UI demo only: live auto-trading is not connected.") }}><i /></button></div>
-        {["Confirmation|Strict Confirmation", "Risk per Trade|1%", "Risk / Reward|1:2", "Max Trades / Day|3", "Daily Loss Limit|₹2,000", "Order Authorization|Confirm before order", "Auto Exit|SL + Target + Trailing"].map(x => <label className="setting-select" key={x}>{x.split("|")[0]}<select><option>{x.split("|")[1]}</option></select></label>)}
-        <div className="switch-row"><button onClick={() => setAlerts(!alerts)}><i className={alerts ? "switch on" : "switch"} /> Alerts {alerts ? "ON" : "OFF"}</button><button onClick={() => setSound(!sound)}><i className={sound ? "switch on" : "switch"} /><Volume2 size={12} /> Sound</button></div>
-        <div className="trade-buttons"><button className="buy" onClick={() => notify("Order preview created: BUY (CE)")}>BUY (CE)</button><button className="sell" onClick={() => notify("Order preview created: SELL (PE)")}>SELL (PE)</button></div>
+
+        <div className="setting-row">
+          <span>Enable Auto Trade</span>
+          <button
+            className={`toggle ${auto ? "on" : ""}`}
+            onClick={() => {
+              setAuto(!auto);
+              if (!auto) notify("UI demo only: live auto-trading is not connected.");
+            }}
+          >
+            <i />
+          </button>
+        </div>
+
+        {[
+          "Confirmation|Strict Confirmation",
+          "Risk per Trade|1%",
+          "Risk / Reward|1:2",
+          "Max Trades / Day|3",
+          "Daily Loss Limit|₹2,000",
+          "Order Authorization|Confirm before order",
+          "Auto Exit|SL + Target + Trailing"
+        ].map(x => (
+          <label className="setting-select" key={x}>
+            {x.split("|")[0]}
+            <select><option>{x.split("|")[1]}</option></select>
+          </label>
+        ))}
+
+        <div className="switch-row">
+          <button onClick={() => setAlerts(!alerts)}>
+            <i className={alerts ? "switch on" : "switch"} />
+            Alerts {alerts ? "ON" : "OFF"}
+          </button>
+
+          <button onClick={() => setSound(!sound)}>
+            <i className={sound ? "switch on" : "switch"} />
+            <Volume2 size={12} /> Sound
+          </button>
+        </div>
+
+        <div className="trade-buttons">
+          <button className="buy" onClick={() => notify("Order preview created: BUY (CE)")}>
+            BUY (CE)
+          </button>
+          <button className="sell" onClick={() => notify("Order preview created: SELL (PE)")}>
+            SELL (PE)
+          </button>
+        </div>
+
         <h3>Quick Order <span className="amber tiny">DEMO</span></h3>
-        <div className="order-row"><select><option>NIFTY 50</option><option>BANK NIFTY</option></select><select><option>{chainData?.selected_expiry ?? "Nearest expiry"}</option></select></div>
-        <div className="order-row"><button className="order-choice selected" onClick={() => notify("CE selected")}>CE</button><button className="order-choice" onClick={() => notify("PE selected")}>PE</button></div>
-        <div className="order-row"><select><option>{chainData?.atm_strike ?? 22850}</option><option>{(chainData?.atm_strike ?? 22850) + 50}</option></select><input type="number" defaultValue={1} min={1} aria-label="Quantity" /><select><option>Market</option><option>Limit</option></select></div>
-        <label className="checkbox"><input type="checkbox" defaultChecked /> Set Stop Loss &amp; Target</label>
-        <button className="primary" onClick={() => notify(tradeMode === "Paper" ? "Demo paper-order preview created." : "Demo order preview created.")}>Preview Order</button>
+
+        <div className="order-row">
+          <select>
+            <option>NIFTY 50</option>
+            <option>BANK NIFTY</option>
+          </select>
+          <select>
+            <option>{chainData?.selected_expiry ?? "Nearest expiry"}</option>
+          </select>
+        </div>
+
+        <div className="order-row">
+          <button className="order-choice selected" onClick={() => notify("CE selected")}>CE</button>
+          <button className="order-choice" onClick={() => notify("PE selected")}>PE</button>
+        </div>
+
+        <div className="order-row">
+          <select>
+            <option>{chainData?.atm_strike ?? 22850}</option>
+            <option>{(chainData?.atm_strike ?? 22850) + 50}</option>
+          </select>
+          <input type="number" defaultValue={1} min={1} aria-label="Quantity" />
+          <select>
+            <option>Market</option>
+            <option>Limit</option>
+          </select>
+        </div>
+
+        <label className="checkbox">
+          <input type="checkbox" defaultChecked />
+          Set Stop Loss &amp; Target
+        </label>
+
+        <button
+          className="primary"
+          onClick={() => notify(
+            tradeMode === "Paper"
+              ? "Demo paper-order preview created."
+              : "Demo order preview created."
+          )}
+        >
+          Preview Order
+        </button>
       </section>
 
       <LiveConfluencePanel
@@ -498,9 +890,13 @@ export default function App() {
 
     <footer>
       <span><ShieldCheck size={13} /> MarketMind AI · Local development</span>
-      <span><i className="live-dot" /> Backend: {backendOnline ? "Connected (Port 8000)" : "Connecting..."}</span>
+      <span>
+        <i className="live-dot" />
+        Backend: {backendOnline ? "Connected (Port 8000)" : "Connecting..."}
+      </span>
       <span>{chainData ? `Last sync: ${chainData.timestamp}` : "Polling..."}</span>
     </footer>
+
     {notice && <div className="toast" role="status">{notice}</div>}
   </div>;
 }

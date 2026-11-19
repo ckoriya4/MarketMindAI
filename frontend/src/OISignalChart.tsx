@@ -20,6 +20,7 @@ import type { OICrossover } from "./oiCrossovers.js";
 import { continuousChanges } from "./continuousOi.js";
 import { makeSegments } from "./dynamicSeries";
 import type { DynamicOIPoint } from "./dynamicSeries";
+import { apiUrl } from "./config/api";
 
 interface OIData {
   absolute_missing_points?: number;
@@ -181,11 +182,11 @@ export default function OISignalChart({
       timeScale: {
         timeVisible: true,
         secondsVisible: false,
-        tickMarkFormatter: t => istTime(Number(t)),
+        tickMarkFormatter: (t: Time) => istTime(Number(t)),
         borderColor: "#1b3447"
       },
       localization: {
-        timeFormatter: t => istTime(Number(t))
+        timeFormatter: (t: Time) => istTime(Number(t))
       },
       rightPriceScale: {
         borderColor: "#1b3447"
@@ -310,7 +311,7 @@ export default function OISignalChart({
         if (expiry) q.set("expiry", expiry);
 
         const response = await fetch(
-          `http://127.0.0.1:8000/api/signals/oi?${q}`,
+          `${apiUrl("/api/signals/oi")}?${q}`,
           { signal: current.signal }
         );
 
@@ -375,7 +376,7 @@ export default function OISignalChart({
     return () => clearInterval(timer);
   }, []);
 
-  // NEW: Send the exact live chart OI values to App.tsx.
+  // Send the exact live chart OI values to App.tsx.
   // No additional API request or polling timer is created.
   useEffect(() => {
     if (!data || error) {
@@ -1355,7 +1356,7 @@ export default function OISignalChart({
             · backfill{" "}
             {data.collector?.backfill.status || "waiting"}
             {data.collector?.backfill.contracts_total
-              ? ` (${data.collector.backfill.contracts_done}/${data.collector.backfill.contracts_total})`
+              ? ` (${data.collector?.backfill.contracts_done}/${data.collector?.backfill.contracts_total})`
               : ""}
             . {data.historical_samples || 0} historical minute observations
             / {data.live_samples || 0} live snapshots.{" "}

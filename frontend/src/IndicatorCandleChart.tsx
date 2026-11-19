@@ -10,11 +10,13 @@ import {
 } from "lightweight-charts";
 
 import type {
+  Time,
   UTCTimestamp,
   LogicalRange,
   ISeriesApi
 } from "lightweight-charts";
 
+import { apiUrl } from "./config/api";
 import { sessionData } from "./marketSession";
 import { attachChartScrollbar } from "./chartScrollbar.js";
 import "./IndicatorCandleChart.css";
@@ -191,7 +193,7 @@ export default function IndicatorCandleChart({
       timeScale: {
         timeVisible: true,
         borderColor: "#1b3447",
-        tickMarkFormatter: t =>
+        tickMarkFormatter: (t: Time) =>
           new Date(Number(t) * 1000).toLocaleTimeString(
             "en-IN",
             {
@@ -203,7 +205,7 @@ export default function IndicatorCandleChart({
           )
       },
       localization: {
-        timeFormatter: t =>
+        timeFormatter: (t: Time) =>
           new Date(Number(t) * 1000).toLocaleString(
             "en-IN",
             { timeZone: "Asia/Kolkata" }
@@ -379,7 +381,7 @@ export default function IndicatorCandleChart({
         });
 
         const response = await fetch(
-          `http://127.0.0.1:8000/api/chart/candles?${params.toString()}`,
+          apiUrl(`/api/chart/candles?${params.toString()}`),
           { signal: currentController.signal }
         );
 
@@ -487,9 +489,7 @@ export default function IndicatorCandleChart({
           withSession(
             (data.volume || []).map((p: Point) => ({
               ...p,
-              color:
-                p.color ||
-                "#26a69a"
+              color: p.color || "#26a69a"
             }))
           )
         );
