@@ -31,23 +31,21 @@ interface MarketOverview {
 }
 
 const EMPTY = [
-  ["NIFTY", "NIFTY 50 (SPOT)"],
+  ["NIFTY", "NIFTY 50"],
   ["BANKNIFTY", "BANK NIFTY"],
   ["SENSEX", "SENSEX"],
   ["VIX", "INDIA VIX"],
-  ["CRUDE", "CRUDE OIL (MCX)"],
-].map(
-  ([id, name]) =>
-    ({
-      id,
-      name,
-      price: null,
-      status: "loading",
-      history: [],
-    }) as MarketCardData
-);
+  ["CRUDE", "CRUDE OIL"],
+].map(([id, name]) => ({
+  id,
+  name,
+  price: null,
+  status: "loading",
+  history: [],
+})) as MarketCardData[];
 
-const signed = (n: number) => `${n >= 0 ? "+" : ""}${n.toFixed(2)}`;
+const signed = (n: number) =>
+  `${n >= 0 ? "+" : ""}${n.toFixed(2)}`;
 
 const formatted = (card: MarketCardData) =>
   card.price == null
@@ -59,61 +57,6 @@ const formatted = (card: MarketCardData) =>
         maximumFractionDigits: 2,
       }
     )}`;
-
-function ObservedSpark({
-  points,
-  down,
-}: {
-  points: { time: number; value: number }[];
-  down: boolean;
-}) {
-  const values = points
-    .filter((p) => Number.isFinite(p.value))
-    .map((p) => p.value);
-
-  const min = Math.min(...values);
-  const max = Math.max(...values);
-
-  const pts = values
-    .map(
-      (value, i) =>
-        `${values.length > 1 ? (i / (values.length - 1)) * 100 : 50},${min === max ? 20 : 34 - ((value - min) / (max - min)) * 28
-        }`
-    )
-    .join(" ");
-
-  return (
-    <svg
-      className={`spark ${down ? "down" : ""}`}
-      viewBox="0 0 100 40"
-      preserveAspectRatio="none"
-      role="img"
-      aria-label="Recorded quote history"
-    >
-      <title>
-        {values.length > 1
-          ? `${values.length} actual quote observations`
-          : "Waiting for more quote observations"}
-      </title>
-
-      {values.length > 1 && (
-        <>
-          <polyline
-            points={pts}
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-          />
-          <polygon
-            points={`0,40 ${pts} 100,40`}
-            fill="currentColor"
-            opacity=".12"
-          />
-        </>
-      )}
-    </svg>
-  );
-}
 
 export default function LiveMarketStrip({
   expiry = "",
@@ -132,7 +75,6 @@ export default function LiveMarketStrip({
     const load = async () => {
       const current = new AbortController();
       controller = current;
-
       const timeout = setTimeout(() => current.abort(), 60000);
 
       try {
@@ -202,8 +144,7 @@ export default function LiveMarketStrip({
     (!!data && (!Number.isFinite(received) || now - received > 45000));
 
   const cards = data?.cards || EMPTY;
-  const atm = data?.atm;
-  const atmChange = atm?.spot_change_pct;
+  const atmChange = data?.atm?.spot_change_pct;
 
   return (
     <section className="market-strip" aria-label="Live market overview">
@@ -211,7 +152,8 @@ export default function LiveMarketStrip({
         const stale =
           requestStale ||
           card.status === "stale" ||
-          (card.quote_time != null && now / 1000 - card.quote_time > 90);
+          (card.quote_time != null &&
+            now / 1000 - card.quote_time > 90);
 
         const unavailable = card.price == null;
         const down = card.change != null && card.change < 0;
@@ -241,13 +183,15 @@ export default function LiveMarketStrip({
 
         return (
           <div className="market-card" key={card.id} title={title}>
-            <div>
+            <div className="market-card-content">
               <div className="muted tiny">
                 {card.name}
                 {status && <span className="amber"> · {status}</span>}
               </div>
 
-              <strong className="market-value">{formatted(card)}</strong>
+              <strong className="market-value">
+                {formatted(card)}
+              </strong>
 
               <div
                 className={
@@ -268,8 +212,6 @@ export default function LiveMarketStrip({
                     : "Previous close unavailable"}
               </div>
             </div>
-
-            <ObservedSpark points={card.history || []} down={down} />
           </div>
         );
       })}

@@ -130,93 +130,169 @@ export default function AtmOiSummary({
         (data.status !== "fresh" ||
             now / 1000 - data.spot_quote_at > 90);
 
+    const sides = [
+        {
+            label: "CE",
+            oi: row?.call_oi_formatted,
+            ltp: row?.call_ltp,
+            change: row?.call_oi_chg,
+            pct: row?.call_oi_pct_chg,
+            baseline: row?.call_baseline_at,
+            sideColor: "#00d6a3",
+        },
+        {
+            label: "PE",
+            oi: row?.put_oi_formatted,
+            ltp: row?.put_ltp,
+            change: row?.put_oi_chg,
+            pct: row?.put_oi_pct_chg,
+            baseline: row?.put_baseline_at,
+            sideColor: "#ff4566",
+        },
+    ];
+
     return (
         <div
-            className="market-status"
-            style={{ gap: 5 }}
+            className="market-card atm-oi-card"
             title={
                 error ||
-                "Actual Kite ATM quotes. OI change compared to previous trading-session close."
+                `ATM OI · ${data?.selected_expiry || expiry} · Previous-session OI baseline`
             }
+            style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                boxSizing: "border-box",
+                overflow: "hidden",
+            }}
         >
-            <span className="muted tiny">
-                ATM Strike{stale ? " · STALE" : ""}
-            </span>
-
-            <strong>{data?.atm_strike ?? "—"}</strong>
-
-            <span style={{ color: color(spotChange) }}>
-                Spot{" "}
-                {spotChange == null
-                    ? "—"
-                    : `${spotChange > 0 ? "+" : ""}${spotChange.toFixed(2)}%`}
-            </span>
-
+            {/* LEFT: ATM STRIKE AND SPOT */}
             <div
                 style={{
-                    width: "100%",
-                    borderTop: "1px solid #1b3447",
-                    paddingTop: 5,
-                    fontSize: 10,
-                    textAlign: "left",
+                    flex: "0 0 38%",
+                    minWidth: 0,
+                    display: "flex",
+                    flexDirection: "column",
+                    justifyContent: "center",
+                    gap: 4,
                 }}
             >
-                <div className="muted tiny">
-                    {data?.selected_expiry || "Loading expiry…"}
+                <div
+                    style={{
+                        fontSize: 9,
+                        color: "#87a1b5",
+                        fontWeight: 700,
+                        whiteSpace: "nowrap",
+                    }}
+                >
+                    ATM {stale ? "· STALE" : ""}
                 </div>
 
-                {(["call", "put"] as const).map((side) => {
-                    const change = row?.[`${side}_oi_chg`];
-                    const pct = row?.[`${side}_oi_pct_chg`];
-                    const baseline = row?.[`${side}_baseline_at`];
+                <div
+                    style={{
+                        fontSize: 18,
+                        fontWeight: 800,
+                        color: "#f1f6fc",
+                        lineHeight: 1.1,
+                        whiteSpace: "nowrap",
+                    }}
+                >
+                    {data?.atm_strike?.toLocaleString("en-IN") ?? "—"}
+                </div>
 
-                    return (
+                <div
+                    style={{
+                        fontSize: 10,
+                        color: color(spotChange),
+                        whiteSpace: "nowrap",
+                    }}
+                >
+                    Spot{" "}
+                    {spotChange == null
+                        ? "—"
+                        : `${spotChange > 0 ? "+" : ""}${spotChange.toFixed(2)}%`}
+                </div>
+            </div>
+
+            {/* RIGHT: CE ABOVE, PE BELOW */}
+            <div
+                style={{
+                    flex: 1,
+                    minWidth: 0,
+                    display: "flex",
+                    flexDirection: "column",
+                    justifyContent: "center",
+                    gap: 5,
+                    borderLeft: "1px solid #1b3447",
+                    paddingLeft: 8,
+                }}
+            >
+                {sides.map((side) => (
+                    <div
+                        key={side.label}
+                        style={{
+                            display: "flex",
+                            flexDirection: "column",
+                            gap: 2,
+                            minWidth: 0,
+                        }}
+                    >
                         <div
-                            key={side}
                             style={{
                                 display: "flex",
                                 justifyContent: "space-between",
-                                gap: 6,
-                                flexWrap: "wrap",
-                                marginTop: 4,
+                                alignItems: "center",
+                                gap: 3,
+                            }}
+                        >
+                            <strong
+                                style={{
+                                    fontSize: 10,
+                                    color: side.sideColor,
+                                }}
+                            >
+                                {side.label}
+                            </strong>
+
+                            <span
+                                style={{
+                                    fontSize: 10,
+                                    color: "#e6f0fb",
+                                    fontWeight: 600,
+                                    whiteSpace: "nowrap",
+                                }}
+                            >
+                                {side.oi || "—"}
+                            </span>
+                        </div>
+
+                        <div
+                            style={{
+                                display: "flex",
+                                justifyContent: "space-between",
+                                gap: 3,
+                                fontSize: 9,
+                                whiteSpace: "nowrap",
+                                color: "#87a1b5",
                             }}
                         >
                             <span>
-                                {side === "call" ? "CE" : "PE"} OI{" "}
-                                {row?.[`${side}_oi_formatted`] || "—"} · LTP{" "}
-                                {row?.[`${side}_ltp`]?.toFixed(2) ?? "—"}
+                                LTP {side.ltp?.toFixed(2) ?? "—"}
                             </span>
 
                             <span
-                                style={{ color: color(change) }}
-                                title={`Previous-session baseline: ${baseline || "loading/unavailable"
-                                    }`}
+                                style={{
+                                    color: color(side.change),
+                                }}
+                                title={`Previous-session baseline: ${side.baseline || "unavailable"}`}
                             >
-                                {change == null
+                                {side.change == null
                                     ? "Δ —"
-                                    : `${change > 0 ? "↑ +" : change < 0 ? "↓ " : ""}${quantity(change)}`}{" "}
-                                {pct == null
-                                    ? "(—)"
-                                    : `(${pct > 0 ? "+" : ""}${pct.toFixed(2)}%)`}
+                                    : `${side.change > 0 ? "+" : ""}${quantity(side.change)}`}
                             </span>
                         </div>
-                    );
-                })}
-
-                <div className="muted tiny" style={{ marginTop: 5 }}>
-                    {error ||
-                        "OI Δ vs previous trading-session close; — = loading / unavailable."}
-                </div>
-
-                {data && (
-                    <div className="muted tiny">
-                        {new Date(data.timestamp).toLocaleTimeString("en-IN", {
-                            timeZone: "Asia/Kolkata",
-                            hour12: false,
-                        })}{" "}
-                        IST · Kite snapshot
                     </div>
-                )}
+                ))}
             </div>
         </div>
     );

@@ -1668,3 +1668,70 @@ footer span {
 .oi-single-line.equal-alert {
     color: #65c7ff;
 }
+
+
+/* Compact horizontal live market cards */
+.market-strip {
+    display: flex !important;
+    flex-wrap: nowrap !important;
+    align-items: stretch;
+    gap: 8px !important;
+    width: 100%;
+    overflow-x: auto !important;
+    overflow-y: hidden !important;
+    padding: 3px 2px 8px;
+    margin-bottom: 8px;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: thin;
+}
+
+.market-card {
+    flex: 0 0 175px !important;
+    width: 175px;
+    min-width: 175px !important;
+    min-height: 72px !important;
+    height: 72px;
+    padding: 8px 10px !important;
+    border-radius: 8px !important;
+    box-sizing: border-box;
+    overflow: hidden;
+}
+
+.market-card-content {
+    min-width: 0;
+    width: 100%;
+}
+
+.market-value {
+    font-size: 19px !important;
+    margin: 4px 0 !important;
+    line-height: 1.2;
+}
+
+.market-card .change {
+    font-size: 10px !important;
+    white-space: nowrap;
+}
+
+.market-card .spark {
+    display: none !important;
+}
+
+@media (max-width: 560px) {
+    .market-strip {
+        gap: 7px !important;
+    }
+
+    .market-card {
+        flex: 0 0 165px !important;
+        width: 165px;
+        min-width: 165px !important;
+        min-height: 70px !important;
+        height: 70px;
+        padding: 7px 9px !important;
+    }
+
+    .market-value {
+        font-size: 18px !important;
+    }
+}

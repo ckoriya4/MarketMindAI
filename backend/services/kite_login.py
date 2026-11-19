@@ -1,91 +1,462 @@
-"""Local dashboard: official Kite browser login, server-side one-time exchange."""
-import os,secrets,time,threading
-from pathlib import Path
-from urllib.parse import urlencode
-from fastapi import APIRouter,Request,HTTPException
-from fastapi.responses import RedirectResponse
-from dotenv import load_dotenv,set_key
+
+"""
+MarketMind AI - Production Zerodha Kite Authentication
+
+Flow:
+1. Frontend redirects user to /api/auth/kite/login
+2. User authenticates with Zerodha
+3. Zerodha redirects to /api/auth/kite/callback
+4. Backend exchanges request_token for access_token
+5. Shared KiteClientManager is updated
+6. Kite WebSocket is restarted
+7. User is redirected to the Vercel frontend
+"""
+
+import os
+import time
+import secrets
+import threading
+
+from urllib.parse import urlencode, urlparse
+
+from fastapi import APIRouter, Request, HTTPException
+from fastapi.responses import RedirectResponse, JSONResponse
+
+from dotenv import load_dotenv
 from kiteconnect import KiteConnect
 from kiteconnect.exceptions import TokenException
-BASE=Path(__file__).resolve().parents[1]
-router=APIRouter();lock=threading.Lock();pending={};cached={}
-COOKIE='kite_login_state'
 
-def local(request):
-    if request.client is None or request.client.host not in ('127.0.0.1','::1','localhost','testclient') or request.url.hostname not in ('127.0.0.1','localhost','testserver'):
-        raise HTTPException(403,'This login integration is for your local dashboard only.')
+
+# ---------------------------------------------------------
+# ENVIRONMENT
+# ---------------------------------------------------------
+
+BASE = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..")
+)
+
+ENV_FILE = os.path.join(BASE, ".env")
+
+load_dotenv(ENV_FILE, override=False)
+
+
+# ---------------------------------------------------------
+# EXISTING MARKETMIND SERVICES
+# ---------------------------------------------------------
+
+from .kite_client import kite_manager
+
+
+# ---------------------------------------------------------
+# ROUTER AND STATE
+# ---------------------------------------------------------
+
+router = APIRouter()
+
+lock = threading.RLock()
+
+pending = {}
+cached = {}
+
+COOKIE = "kite_login_state"
+
+LOGIN_TIMEOUT = 600
+
+
+# ---------------------------------------------------------
+# CONFIGURATION
+# ---------------------------------------------------------
 
 def config():
-    load_dotenv(BASE/'.env',override=True)
-    key=os.getenv('KITE_API_KEY','').strip();secret=os.getenv('KITE_API_SECRET','').strip()
-    if not key or not secret:raise HTTPException(503,'Set KITE_API_KEY and KITE_API_SECRET once in backend/.env. Register the callback URL in the Kite developer console.')
-    return key,secret
+
+    load_dotenv(ENV_FILE, override=False)
+
+    api_key = os.getenv(
+        "KITE_API_KEY", ""
+    ).strip()
+
+    api_secret = os.getenv(
+        "KITE_API_SECRET", ""
+    ).strip()
+
+    frontend_url = os.getenv(
+        "FRONTEND_URL", ""
+    ).strip().rstrip("/")
+
+    if not api_key or not api_secret:
+
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "KITE_API_KEY and KITE_API_SECRET "
+                "must be configured in Render Environment."
+            )
+        )
+
+    if not frontend_url:
+
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "FRONTEND_URL is missing. "
+                "Set it to your deployed Vercel frontend URL."
+            )
+        )
+
+    parsed = urlparse(frontend_url)
+
+    if (
+        parsed.scheme not in ("https", "http")
+        or not parsed.netloc
+        or parsed.path not in ("", "/")
+        or parsed.query
+        or parsed.fragment
+        or parsed.username
+        or parsed.password
+    ):
+
+        raise HTTPException(
+            status_code=503,
+            detail="Invalid FRONTEND_URL configuration."
+        )
+
+    return api_key, api_secret, frontend_url
+
+
+# ---------------------------------------------------------
+# RESPONSE SECURITY
+# ---------------------------------------------------------
 
 def clean(response):
-    response.headers['Cache-Control']='no-store';response.headers['Referrer-Policy']='no-referrer'
+
+    response.headers["Cache-Control"] = "no-store"
+
+    response.headers["Pragma"] = "no-cache"
+
+    response.headers["Referrer-Policy"] = "no-referrer"
+
     return response
 
+
 def finish(message):
-    response=RedirectResponse('http://127.0.0.1:5173/?kite_login='+message,status_code=303)
-    response.delete_cookie(COOKIE,path='/api/auth/kite')
+
+    _, _, frontend_url = config()
+
+    destination = (
+        frontend_url
+        + "/?"
+        + urlencode({"kite_login": message})
+    )
+
+    response = RedirectResponse(
+        destination,
+        status_code=303
+    )
+
+    response.delete_cookie(
+        COOKIE,
+        path="/api/auth/kite"
+    )
+
     return clean(response)
 
-@router.get('/api/auth/kite/login')
-def login(request:Request):
-    local(request);key,_=config();state=secrets.token_urlsafe(32)
-    with lock:
-        for value,created in list(pending.items()):
-            if time.monotonic()-created>600:pending.pop(value,None)
-        if len(pending)>=100:raise HTTPException(429,'Too many pending logins; retry later.')
-        pending[state]=time.monotonic()
-    # Official redirect_params is returned to the registered callback URL.
-    query=urlencode(dict(v=3,api_key=key,redirect_params=urlencode(dict(state=state))))
-    response=RedirectResponse('https://kite.zerodha.com/connect/login?'+query,status_code=303)
-    response.set_cookie(COOKIE,state,max_age=600,httponly=True,samesite='lax',path='/api/auth/kite')
-    return clean(response)
 
-@router.get('/api/auth/kite/callback')
-def callback(request:Request):
-    local(request)
-    params=dict(request.query_params)
-    request.scope['query_string']=b'' # Avoid callback request_token in default Uvicorn access logs.
-    state=params.get('state','');cookie=request.cookies.get(COOKIE,'')
-    if not state or not cookie or not secrets.compare_digest(state,cookie):return finish('invalid_state')
-    with lock:created=pending.pop(state,None)
-    if created is None or time.monotonic()-created>600:return finish('expired_login')
-    token=params.get('request_token','')
-    if params.get('status')!='success' or not token or len(token)>512:return finish('cancelled')
-    try:
-        key,secret=config();kite=KiteConnect(api_key=key,timeout=12)
-        session=kite.generate_session(token,api_secret=secret)
-        access=session.get('access_token')
-        if not isinstance(access,str) or not access:raise ValueError('Missing access token')
-        # dotenv helper uses atomic replacement; never return/log secret material.
-        with lock:
-            set_key(str(BASE/'.env'),'KITE_ACCESS_TOKEN',access,quote_mode='always')
-            try:os.chmod(BASE/'.env',0o600)
-            except OSError:pass
-            os.environ['KITE_ACCESS_TOKEN']=access
-            cached.clear()
-        return finish('success')
-    except Exception:return finish('exchange_failed')
+def json_response(data):
 
-@router.get('/api/auth/kite/status')
-def status(request:Request):
-    local(request)
-    try:key,_=config()
-    except HTTPException:return clean_json(dict(state='setup_required'))
-    token=os.getenv('KITE_ACCESS_TOKEN','').strip()
-    if not token:return clean_json(dict(state='login_required'))
-    with lock:
-        if cached.get('token')==token and time.monotonic()-cached.get('at',0)<60:return clean_json(dict(state=cached['state']))
-    try:
-        kite=KiteConnect(api_key=key,timeout=8);kite.set_access_token(token);kite.profile();value='connected'
-    except TokenException:value='login_required'
-    except Exception:value='connection_unverified'
-    with lock:cached.update(token=token,at=time.monotonic(),state=value)
-    return clean_json(dict(state=value))
-
-def clean_json(data):
-    from fastapi.responses import JSONResponse
     return clean(JSONResponse(data))
+
+
+# ---------------------------------------------------------
+# PENDING LOGIN CLEANUP
+# ---------------------------------------------------------
+
+def cleanup_pending():
+
+    now = time.monotonic()
+
+    for state, created in list(pending.items()):
+
+        if now - created > LOGIN_TIMEOUT:
+
+            pending.pop(state, None)
+
+
+# ---------------------------------------------------------
+# KITE LOGIN
+# ---------------------------------------------------------
+
+@router.get("/api/auth/kite/login")
+def login(request: Request):
+
+    api_key, _, _ = config()
+
+    state = secrets.token_urlsafe(32)
+
+    with lock:
+
+        cleanup_pending()
+
+        if len(pending) >= 100:
+
+            raise HTTPException(
+                status_code=429,
+                detail="Too many pending login attempts."
+            )
+
+        pending[state] = time.monotonic()
+
+    # Official Kite Connect login URL.
+    query = urlencode({
+        "v": 3,
+        "api_key": api_key,
+        "redirect_params": urlencode({
+            "state": state
+        })
+    })
+
+    login_url = (
+        "https://kite.zerodha.com/connect/login?"
+        + query
+    )
+
+    response = RedirectResponse(
+        login_url,
+        status_code=303
+    )
+
+    is_production = (
+        os.getenv("ENVIRONMENT", "").lower()
+        == "production"
+    )
+
+    response.set_cookie(
+        key=COOKIE,
+        value=state,
+        max_age=LOGIN_TIMEOUT,
+        httponly=True,
+        secure=is_production,
+        samesite="lax",
+        path="/api/auth/kite"
+    )
+
+    return clean(response)
+
+
+# ---------------------------------------------------------
+# KITE CALLBACK
+# ---------------------------------------------------------
+
+@router.get("/api/auth/kite/callback")
+def callback(request: Request):
+
+    params = dict(request.query_params)
+
+    # Avoid exposing request_token in ordinary access logs
+    # where supported by the ASGI server.
+    request.scope["query_string"] = b""
+
+    state = params.get("state", "")
+
+    cookie_state = request.cookies.get(
+        COOKIE, ""
+    )
+
+    if (
+        not state
+        or not cookie_state
+        or not secrets.compare_digest(
+            state,
+            cookie_state
+        )
+    ):
+
+        return finish("invalid_state")
+
+    with lock:
+
+        cleanup_pending()
+
+        created = pending.pop(state, None)
+
+    if created is None:
+
+        return finish("expired_login")
+
+    if time.monotonic() - created > LOGIN_TIMEOUT:
+
+        return finish("expired_login")
+
+    request_token = params.get(
+        "request_token", ""
+    )
+
+    status = params.get("status", "")
+
+    if (
+        status != "success"
+        or not request_token
+        or len(request_token) > 512
+    ):
+
+        return finish("cancelled")
+
+    try:
+
+        api_key, api_secret, _ = config()
+
+        kite = KiteConnect(
+            api_key=api_key,
+            timeout=15
+        )
+
+        # Exchange one-time request token.
+        session = kite.generate_session(
+            request_token,
+            api_secret=api_secret
+        )
+
+        access_token = session.get(
+            "access_token", ""
+        )
+
+        if (
+            not isinstance(access_token, str)
+            or not access_token.strip()
+        ):
+
+            raise ValueError(
+                "Kite did not return an access token."
+            )
+
+        # Verify token and activate shared client.
+        success = kite_manager.set_access_token(
+            access_token
+        )
+
+        if not success:
+
+            return finish("exchange_failed")
+
+        # -------------------------------------------------
+        # RECONNECT KITE WEBSOCKET
+        # -------------------------------------------------
+
+        try:
+
+            from .kite_stream import kite_stream
+
+            try:
+                kite_stream.stop()
+            except Exception:
+                pass
+
+            kite_stream.start(
+                kite_manager.api_key,
+                kite_manager.access_token
+            )
+
+            print(
+                "[KiteLogin] WebSocket restart requested."
+            )
+
+        except Exception as exc:
+
+            # Authentication succeeded even if WebSocket
+            # startup needs separate troubleshooting.
+            print(
+                "[KiteLogin] WebSocket restart warning:",
+                str(exc)
+            )
+
+        # Invalidate cached status.
+        with lock:
+            cached.clear()
+
+        print(
+            "[KiteLogin] Zerodha authentication successful."
+        )
+
+        return finish("success")
+
+    except TokenException:
+
+        print("[KiteLogin] Kite token exchange rejected.")
+
+        return finish("exchange_failed")
+
+    except Exception as exc:
+
+        print(
+            "[KiteLogin] Authentication error:",
+            str(exc)
+        )
+
+        return finish("exchange_failed")
+
+
+# ---------------------------------------------------------
+# KITE LOGIN STATUS
+# ---------------------------------------------------------
+
+@router.get("/api/auth/kite/status")
+def status(request: Request):
+
+    try:
+
+        api_key, _, _ = config()
+
+    except HTTPException:
+
+        return json_response({
+            "state": "setup_required"
+        })
+
+    # Use the shared manager instead of a separate
+    # environment-only token check.
+    manager_status = kite_manager.get_status()
+
+    if not manager_status["has_access_token"]:
+
+        return json_response({
+            "state": "login_required",
+            "connected": False
+        })
+
+    if manager_status["is_connected"]:
+
+        return json_response({
+            "state": "connected",
+            "connected": True
+        })
+
+    return json_response({
+        "state": "login_required",
+        "connected": False
+    })
+
+
+# ---------------------------------------------------------
+# OPTIONAL LOGOUT STATUS ENDPOINT
+# ---------------------------------------------------------
+
+@router.post("/api/auth/kite/logout")
+def logout():
+
+    with kite_manager._lock:
+
+        kite_manager.kite = None
+        kite_manager.access_token = ""
+        kite_manager.is_connected = False
+
+    os.environ.pop(
+        "KITE_ACCESS_TOKEN",
+        None
+    )
+
+    with lock:
+        cached.clear()
+
+    return json_response({
+        "state": "logged_out",
+        "connected": False
+    })
