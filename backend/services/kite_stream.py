@@ -34,20 +34,23 @@ class KiteStream:
                 return False
 
             try:
+
                 ticker = KiteTicker(
                     api_key,
-                    access_token
+                    access_token,
+                    reconnect=True
                 )
 
                 self.ticker = ticker
                 self.connected = False
 
-                # Clear old ticks, but preserve subscriptions.
+                # Clear old ticks but preserve subscriptions.
                 self.latest_ticks.clear()
 
             except Exception as exc:
 
                 self.ticker = None
+                self.connected = False
 
                 print(
                     "[KiteStream] Initialization error:",
@@ -56,6 +59,7 @@ class KiteStream:
 
                 return False
 
+        # Register callbacks.
         ticker.on_connect = self._on_connect
         ticker.on_ticks = self._on_ticks
         ticker.on_close = self._on_close
@@ -65,13 +69,14 @@ class KiteStream:
 
             ticker.connect(threaded=True)
 
-            print("[KiteStream] WebSocket starting")
+            print("[KiteStream] WebSocket start requested")
 
             return True
 
         except Exception as exc:
 
             with self.lock:
+
                 if self.ticker is ticker:
                     self.ticker = None
 
@@ -85,12 +90,25 @@ class KiteStream:
             return False
 
     # --------------------------------------------------
+    # CHECK CURRENT CONNECTION
+    # --------------------------------------------------
+
+    def _is_current(self, ws):
+
+        with self.lock:
+            return self.ticker is ws
+
+    # --------------------------------------------------
     # ON CONNECT
     # --------------------------------------------------
 
     def _on_connect(self, ws, response):
 
         with self.lock:
+
+            # Ignore callbacks from an old connection.
+            if self.ticker is not ws:
+                return
 
             self.connected = True
 
@@ -101,6 +119,7 @@ class KiteStream:
         if tokens:
 
             try:
+
                 ws.subscribe(tokens)
 
                 ws.set_mode(
@@ -130,6 +149,9 @@ class KiteStream:
 
         with self.lock:
 
+            if self.ticker is not ws:
+                return
+
             for tick in ticks:
 
                 token = tick.get(
@@ -150,6 +172,10 @@ class KiteStream:
 
         with self.lock:
 
+            # Do not let an old connection update new status.
+            if self.ticker is not ws:
+                return
+
             self.connected = False
 
         print(
@@ -164,6 +190,13 @@ class KiteStream:
 
     def _on_error(self, ws, code, reason):
 
+        with self.lock:
+
+            if self.ticker is not ws:
+                return
+
+            self.connected = False
+
         print(
             "[KiteStream] Error:",
             code,
@@ -176,14 +209,66 @@ class KiteStream:
 
     def subscribe(self, token):
 
-        token = int(token)
+        try:
+            token = int(token)
+        except (TypeError, ValueError):
+            print("[KiteStream] Invalid instrument token:", token)
+            return False
+
+        if token <= 0:
+            return False
 
         with self.lock:
 
-            if token in self.subscribed_tokens:
-                return
-
+            # Save token even if WebSocket is not connected yet.
             self.subscribed_tokens.add(token)
+
+            ticker = self.ticker
+            connected = self.connected
+
+        if not ticker or not connected:
+            return True
+
+        try:
+
+            ticker.subscribe([token])
+
+            ticker.set_mode(
+                ticker.MODE_FULL,
+                [token]
+            )
+
+            print(
+                "[KiteStream] Subscribed:",
+                token
+            )
+
+            return True
+
+        except Exception as exc:
+
+            print(
+                "[KiteStream] Subscribe error:",
+                str(exc)
+            )
+
+            return False
+
+    # --------------------------------------------------
+    # UNSUBSCRIBE INSTRUMENT
+    # --------------------------------------------------
+
+    def unsubscribe(self, token):
+
+        try:
+            token = int(token)
+        except (TypeError, ValueError):
+            return False
+
+        with self.lock:
+
+            self.subscribed_tokens.discard(token)
+            self.latest_ticks.pop(token, None)
 
             ticker = self.ticker
             connected = self.connected
@@ -192,24 +277,23 @@ class KiteStream:
 
             try:
 
-                ticker.subscribe([token])
-
-                ticker.set_mode(
-                    ticker.MODE_FULL,
-                    [token]
-                )
+                ticker.unsubscribe([token])
 
                 print(
-                    "[KiteStream] Subscribed:",
+                    "[KiteStream] Unsubscribed:",
                     token
                 )
 
             except Exception as exc:
 
                 print(
-                    "[KiteStream] Subscribe error:",
+                    "[KiteStream] Unsubscribe error:",
                     str(exc)
                 )
+
+                return False
+
+        return True
 
     # --------------------------------------------------
     # GET LATEST TICK
@@ -217,24 +301,36 @@ class KiteStream:
 
     def get_tick(self, token):
 
-        token = int(token)
+        try:
+            token = int(token)
+        except (TypeError, ValueError):
+
+            return {
+                "status": "error",
+                "detail": "Invalid instrument token"
+            }
 
         with self.lock:
 
             tick = self.latest_ticks.get(token)
-
             connected = self.connected
 
             if tick is None:
 
                 return {
                     "status": "waiting",
-                    "websocket_connected": connected
+                    "websocket_connected": connected,
+                    "instrument_token": token
                 }
 
             timestamp = tick.get(
                 "exchange_timestamp"
             )
+
+            if hasattr(timestamp, "isoformat"):
+                timestamp = timestamp.isoformat()
+            elif timestamp is not None:
+                timestamp = str(timestamp)
 
             return {
                 "status": "success",
@@ -245,10 +341,25 @@ class KiteStream:
                 "volume": tick.get("volume_traded"),
                 "average_price": tick.get("average_price"),
                 "oi": tick.get("oi"),
-                "exchange_timestamp": (
-                    timestamp.isoformat()
-                    if timestamp
-                    else None
+                "exchange_timestamp": timestamp
+            }
+
+    # --------------------------------------------------
+    # STREAM STATUS
+    # --------------------------------------------------
+
+    def get_status(self):
+
+        with self.lock:
+
+            return {
+                "started": self.ticker is not None,
+                "connected": self.connected,
+                "subscribed_count": len(
+                    self.subscribed_tokens
+                ),
+                "tick_count": len(
+                    self.latest_ticks
                 )
             }
 
@@ -262,11 +373,11 @@ class KiteStream:
 
             ticker = self.ticker
 
+            # Detach old connection before closing it.
             self.ticker = None
             self.connected = False
 
-            # Preserve subscribed_tokens.
-            # They will be restored on the next connection.
+            # Preserve subscribed_tokens for next connection.
             self.latest_ticks.clear()
 
         if ticker:
@@ -285,6 +396,8 @@ class KiteStream:
                     "[KiteStream] Close error:",
                     str(exc)
                 )
+
+        return True
 
 
 # ------------------------------------------------------

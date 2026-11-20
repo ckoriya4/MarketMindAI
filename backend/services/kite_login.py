@@ -1,13 +1,13 @@
 
 """
-MarketMind AI - Zerodha Kite Authentication
+MarketMind AI - Zerodha Kite Authentication with PostgreSQL
 
 Login flow:
 1. Frontend opens /api/auth/kite/login
 2. User authenticates with Zerodha
 3. Zerodha redirects to /api/auth/kite/callback
-4. Backend exchanges request_token
-5. Shared KiteClientManager verifies the access token
+4. Backend exchanges request_token for access_token
+5. Shared KiteClientManager verifies and saves access_token in PostgreSQL
 6. Kite WebSocket starts
 7. User returns to the Vercel dashboard
 """
@@ -43,7 +43,7 @@ load_dotenv(ENV_FILE, override=False)
 
 
 # --------------------------------------------------
-# ROUTER AND STATE
+# ROUTER AND LOGIN STATE
 # --------------------------------------------------
 
 router = APIRouter()
@@ -63,10 +63,7 @@ LOGIN_TIMEOUT = 600
 
 def config():
 
-    load_dotenv(
-        ENV_FILE,
-        override=False
-    )
+    load_dotenv(ENV_FILE, override=False)
 
     api_key = os.getenv(
         "KITE_API_KEY", ""
@@ -81,17 +78,15 @@ def config():
     ).strip().rstrip("/")
 
     if not api_key or not api_secret:
-
         raise HTTPException(
             status_code=503,
-            detail="Kite API credentials are missing in Render."
+            detail="Kite API credentials are missing."
         )
 
     if not frontend_url:
-
         raise HTTPException(
             status_code=503,
-            detail="FRONTEND_URL is missing in Render."
+            detail="FRONTEND_URL is missing."
         )
 
     parsed = urlparse(frontend_url)
@@ -105,7 +100,6 @@ def config():
         or parsed.username
         or parsed.password
     ):
-
         raise HTTPException(
             status_code=503,
             detail="Invalid FRONTEND_URL."
@@ -149,7 +143,7 @@ def finish(message):
     )
 
     response.delete_cookie(
-        COOKIE,
+        key=COOKIE,
         path="/api/auth/kite"
     )
 
@@ -160,10 +154,13 @@ def finish(message):
 # JSON RESPONSE
 # --------------------------------------------------
 
-def json_response(data):
+def json_response(data, status_code=200):
 
     return clean(
-        JSONResponse(data)
+        JSONResponse(
+            data,
+            status_code=status_code
+        )
     )
 
 
@@ -178,20 +175,24 @@ def cleanup_pending():
     for state, created in list(pending.items()):
 
         if now - created > LOGIN_TIMEOUT:
-
             pending.pop(state, None)
 
 
 # --------------------------------------------------
-# START WEBSOCKET
+# START KITE WEBSOCKET
 # --------------------------------------------------
 
 def start_kite_stream():
+
+    if not kite_manager.is_connected:
+        print("[KiteLogin] Cannot start WebSocket: Kite is disconnected.")
+        return False
 
     try:
 
         from .kite_stream import kite_stream
 
+        # Stop an old stream before starting a new one.
         kite_stream.stop()
 
         started = kite_stream.start(
@@ -201,7 +202,7 @@ def start_kite_stream():
 
         print(
             "[KiteLogin] WebSocket start requested:",
-            started
+            bool(started)
         )
 
         return bool(started)
@@ -223,7 +224,7 @@ def start_kite_stream():
 @router.get("/api/auth/kite/login")
 def login(request: Request):
 
-    api_key, _, _ = config()
+    api_key, _, frontend_url = config()
 
     state = secrets.token_urlsafe(32)
 
@@ -232,7 +233,6 @@ def login(request: Request):
         cleanup_pending()
 
         if len(pending) >= 100:
-
             raise HTTPException(
                 status_code=429,
                 detail="Too many pending login attempts."
@@ -258,12 +258,15 @@ def login(request: Request):
         status_code=303
     )
 
+    # HTTPS in production; HTTP allowed for localhost testing.
+    secure_cookie = frontend_url.startswith("https://")
+
     response.set_cookie(
         key=COOKIE,
         value=state,
         max_age=LOGIN_TIMEOUT,
         httponly=True,
-        secure=True,
+        secure=secure_cookie,
         samesite="lax",
         path="/api/auth/kite"
     )
@@ -278,18 +281,15 @@ def login(request: Request):
 @router.get("/api/auth/kite/callback")
 def callback(request: Request):
 
-    params = dict(
-        request.query_params
-    )
+    params = dict(request.query_params)
 
-    state = params.get(
-        "state", ""
-    )
+    state = params.get("state", "")
 
     cookie_state = request.cookies.get(
         COOKIE, ""
     )
 
+    # Validate state against the browser cookie.
     if (
         not state
         or not cookie_state
@@ -298,9 +298,10 @@ def callback(request: Request):
             cookie_state
         )
     ):
-
+        print("[KiteLogin] Invalid callback state.")
         return finish("invalid_state")
 
+    # Validate that this login was initiated by this backend.
     with lock:
 
         cleanup_pending()
@@ -311,11 +312,9 @@ def callback(request: Request):
         )
 
     if created is None:
-
         return finish("expired_login")
 
     if time.monotonic() - created > LOGIN_TIMEOUT:
-
         return finish("expired_login")
 
     request_token = params.get(
@@ -331,19 +330,18 @@ def callback(request: Request):
         or not request_token
         or len(request_token) > 512
     ):
-
         return finish("cancelled")
 
     try:
 
         api_key, api_secret, _ = config()
 
+        # Exchange request_token for access_token.
         kite = KiteConnect(
             api_key=api_key,
             timeout=15
         )
 
-        # Exchange request token.
         session = kite.generate_session(
             request_token,
             api_secret=api_secret
@@ -353,33 +351,36 @@ def callback(request: Request):
             "access_token", ""
         )
 
-        if not isinstance(access_token, str) or not access_token.strip():
-
+        if (
+            not isinstance(access_token, str)
+            or not access_token.strip()
+        ):
             raise ValueError(
                 "Kite did not return an access token."
             )
 
-        # Verify and activate shared client.
-        success = kite_manager.set_access_token(
+        # Verify token and save it to PostgreSQL.
+        saved = kite_manager.set_access_token(
             access_token
         )
 
-        if not success:
-
+        if not saved:
+            print(
+                "[KiteLogin] Access token verification or PostgreSQL save failed."
+            )
             return finish("exchange_failed")
 
-        # Start WebSocket after successful authentication.
+        # Start WebSocket using the shared Kite manager.
         websocket_started = start_kite_stream()
 
-        print(
-            "[KiteLogin] Authentication successful."
-        )
-
+        print("[KiteLogin] Authentication successful.")
         print(
             "[KiteLogin] WebSocket start requested:",
             websocket_started
         )
 
+        # Authentication is successful even if the WebSocket
+        # takes a little time to establish its connection.
         return finish("success")
 
     except TokenException:
@@ -408,7 +409,6 @@ def callback(request: Request):
 def status(request: Request):
 
     try:
-
         config()
 
     except HTTPException:
@@ -437,7 +437,12 @@ def status(request: Request):
             kite_stream.connected
         )
 
-    except Exception:
+    except Exception as exc:
+
+        print(
+            "[KiteLogin] WebSocket status error:",
+            str(exc)
+        )
 
         websocket_connected = False
 
@@ -457,8 +462,7 @@ def status(request: Request):
 @router.post("/api/auth/kite/logout")
 def logout():
 
-    kite_manager.logout()
-
+    # Stop the WebSocket first.
     try:
 
         from .kite_stream import kite_stream
@@ -471,6 +475,17 @@ def logout():
             "[KiteLogin] WebSocket stop warning:",
             str(exc)
         )
+
+    # Delete the token from PostgreSQL.
+    deleted = kite_manager.logout()
+
+    if not deleted:
+
+        return json_response({
+            "state": "logout_failed",
+            "connected": kite_manager.is_connected,
+            "detail": "Could not delete the saved token from PostgreSQL."
+        }, status_code=503)
 
     return json_response({
         "state": "logged_out",

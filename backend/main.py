@@ -1,5 +1,5 @@
 
-"""MarketMind AI - Existing dashboard API plus Kite-backed stock scanner."""
+"""MarketMind AI - Dashboard API with PostgreSQL-backed Kite authentication."""
 
 import asyncio
 import csv
@@ -19,7 +19,6 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from kiteconnect.exceptions import TokenException
 
 
 # ---------------------------------------------------------
@@ -28,7 +27,7 @@ from kiteconnect.exceptions import TokenException
 
 BASE = Path(__file__).resolve().parent
 
-load_dotenv(BASE / ".env")
+load_dotenv(BASE / ".env", override=False)
 
 
 # ---------------------------------------------------------
@@ -69,6 +68,38 @@ from .services.kite_login import router as kite_login_router
 
 
 # ---------------------------------------------------------
+# CORS ORIGINS
+# ---------------------------------------------------------
+
+def get_allowed_origins():
+
+    origins = {
+        "http://localhost:5173",
+        "http://127.0.0.1:5173"
+    }
+
+    frontend_url = os.getenv(
+        "FRONTEND_URL", ""
+    ).strip().rstrip("/")
+
+    if frontend_url:
+        origins.add(frontend_url)
+
+    extra_origins = os.getenv(
+        "FRONTEND_ORIGINS", ""
+    )
+
+    for origin in extra_origins.split(","):
+
+        origin = origin.strip().rstrip("/")
+
+        if origin:
+            origins.add(origin)
+
+    return sorted(origins)
+
+
+# ---------------------------------------------------------
 # APPLICATION LIFESPAN
 # ---------------------------------------------------------
 
@@ -77,28 +108,60 @@ async def lifespan(app: FastAPI):
 
     print("[MarketMind] Starting dashboard services...")
 
-    recorder.start()
-
-    stock_oi_collector.start()
-
-    # Start the existing Kite WebSocket connection.
-    # Uses credentials from the existing KiteClientManager.
+    # Start recorder.
     try:
-        if kite_manager.is_connected:
-            kite_stream.start(
+        recorder.start()
+    except Exception as exc:
+        print("[MarketMind] Recorder startup warning:", str(exc))
+
+    # Reload token from PostgreSQL and verify with Zerodha.
+    try:
+
+        restored = kite_manager.reconnect()
+
+        if restored:
+
+            print(
+                "[MarketMind] PostgreSQL Kite session restored."
+            )
+
+            # Start the shared Kite WebSocket.
+            started = kite_stream.start(
                 kite_manager.api_key,
                 kite_manager.access_token
             )
-        else:
+
             print(
-                "[KiteStream] Kite REST session unavailable. "
-                "WebSocket not started."
+                "[MarketMind] Kite WebSocket start requested:",
+                started
+            )
+
+        else:
+
+            print(
+                "[MarketMind] No valid saved Kite session. "
+                "Login with Kite is required."
             )
 
     except Exception as exc:
-        print("[KiteStream] Startup error:", exc)
+
+        print(
+            "[MarketMind] Kite startup error:",
+            str(exc)
+        )
+
+    # Start stock OI collector.
+    try:
+        stock_oi_collector.start()
+        print("[MarketMind] Stock OI collector started.")
+    except Exception as exc:
+        print(
+            "[MarketMind] Stock OI collector startup warning:",
+            str(exc)
+        )
 
     try:
+
         yield
 
     finally:
@@ -108,11 +171,17 @@ async def lifespan(app: FastAPI):
         try:
             kite_stream.stop()
         except Exception as exc:
-            print("[KiteStream] Shutdown error:", exc)
+            print("[KiteStream] Shutdown error:", str(exc))
 
-        stock_oi_collector.stop()
+        try:
+            stock_oi_collector.stop()
+        except Exception as exc:
+            print("[MarketMind] Collector shutdown error:", str(exc))
 
-        await asyncio.to_thread(recorder.stop)
+        try:
+            await asyncio.to_thread(recorder.stop)
+        except Exception as exc:
+            print("[MarketMind] Recorder shutdown error:", str(exc))
 
         print("[MarketMind] Dashboard stopped.")
 
@@ -134,10 +203,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173"
-    ],
+    allow_origins=get_allowed_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -284,9 +350,7 @@ def health():
     return {
         "status": "healthy",
         "kite_status": kite_manager.get_status(),
-        "kite_websocket": {
-            "connected": kite_stream.connected
-        }
+        "kite_websocket": kite_stream.get_status()
     }
 
 
@@ -426,19 +490,16 @@ def chart_candles(
         session=session
     )
 
-    # Subscribe to the actual instrument token.
-    # NIFTY futures token is resolved by chart_service.
     token = data.get("instrument_token")
 
     if token:
-
         kite_stream.subscribe(token)
 
     return data
 
 
 # ---------------------------------------------------------
-# CHART TICK - EXISTING REST ENDPOINT
+# CHART TICK
 # ---------------------------------------------------------
 
 @app.get("/api/chart/tick")
@@ -488,8 +549,6 @@ def chart_live(
             "Supported symbols: NIFTY, NIFTY_FUT"
         )
 
-    # Resolve the actual instrument using existing
-    # historical chart service and cache.
     data = get_chart_data(
         symbol=symbol,
         timeframe="1m",
@@ -505,7 +564,8 @@ def chart_live(
             "Instrument token unavailable"
         )
 
-    # Ensure WebSocket subscription.
+    # Remember subscription even if WebSocket is not
+    # connected yet. It will subscribe on connection.
     kite_stream.subscribe(token)
 
     tick = kite_stream.get_tick(token)
@@ -516,11 +576,6 @@ def chart_live(
         "instrument": data.get("instrument"),
         "quote_key": data.get("quote_key")
     }
-
-
-# ---------------------------------------------------------
-# EXISTING ROUTER / SERVICES ARE PRESERVED
-# ---------------------------------------------------------
 
 
 # ---------------------------------------------------------

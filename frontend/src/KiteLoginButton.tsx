@@ -10,6 +10,13 @@ type KiteState =
     | "connection_unverified"
     | "backend_unavailable";
 
+interface KiteStatusResponse {
+    state?: string;
+    connected?: boolean;
+    websocket_connected?: boolean;
+    message?: string;
+}
+
 export default function KiteLoginButton() {
 
     const [state, setState] = useState<KiteState>("checking");
@@ -20,13 +27,22 @@ export default function KiteLoginButton() {
         const url = new URL(window.location.href);
         const loginResult = url.searchParams.get("kite_login");
 
+        let retryDelay = 15000;
+
         if (loginResult) {
 
             if (loginResult === "success") {
+
                 setResult(
                     "Zerodha authentication completed. Verifying backend session..."
                 );
+
+                // Give the backend a moment to finish saving
+                // the token and starting the WebSocket.
+                retryDelay = 2000;
+
             } else {
+
                 setResult(
                     `Login failed (${loginResult}). Please try again.`
                 );
@@ -42,15 +58,19 @@ export default function KiteLoginButton() {
         }
 
         let active = true;
+
         let timer: ReturnType<typeof setTimeout> | undefined;
+
         let controller: AbortController | undefined;
 
         const loadStatus = async () => {
 
             controller = new AbortController();
 
+            const currentController = controller;
+
             const timeout = setTimeout(() => {
-                controller?.abort();
+                currentController.abort();
             }, 12000);
 
             try {
@@ -59,7 +79,7 @@ export default function KiteLoginButton() {
                     apiUrl("/api/auth/kite/status"),
                     {
                         method: "GET",
-                        signal: controller.signal,
+                        signal: currentController.signal,
                         cache: "no-store",
                         headers: {
                             Accept: "application/json"
@@ -73,34 +93,51 @@ export default function KiteLoginButton() {
                     );
                 }
 
-                const data = await response.json();
+                const data: KiteStatusResponse =
+                    await response.json();
 
                 if (!active) return;
 
-                const nextState = data.state as KiteState;
-
                 if (
-                    nextState === "connected" &&
+                    data.state === "connected" &&
                     data.connected === true
                 ) {
+
                     setState("connected");
-                    setResult("Zerodha Kite session verified.");
+
+                    setResult(
+                        "Zerodha Kite session verified."
+                    );
+
                 } else if (
-                    nextState === "setup_required"
+                    data.state === "setup_required"
                 ) {
+
                     setState("setup_required");
+
                 } else if (
-                    nextState === "connection_unverified"
+                    data.state === "connection_unverified"
                 ) {
+
                     setState("connection_unverified");
-                } else {
+
+                } else if (
+                    data.state === "login_required"
+                ) {
+
                     setState("login_required");
+
+                } else {
+
+                    setState("connection_unverified");
                 }
 
             } catch (error) {
 
                 if (active) {
+
                     setState("backend_unavailable");
+
                 }
 
             } finally {
@@ -108,10 +145,13 @@ export default function KiteLoginButton() {
                 clearTimeout(timeout);
 
                 if (active) {
+
                     timer = setTimeout(
                         loadStatus,
-                        15000
+                        retryDelay
                     );
+
+                    retryDelay = 15000;
                 }
             }
         };
@@ -156,6 +196,7 @@ export default function KiteLoginButton() {
                 : "#f59e0b";
 
     return (
+
         <span
             style={{
                 display: "inline-flex",
@@ -193,6 +234,7 @@ export default function KiteLoginButton() {
                     fontWeight: 600
                 }}
             >
+
                 <span
                     style={{
                         width: 7,
@@ -204,9 +246,11 @@ export default function KiteLoginButton() {
                 />
 
                 {labels[state]}
+
             </span>
 
             {result && (
+
                 <span
                     style={{
                         width: "100%",
@@ -216,6 +260,7 @@ export default function KiteLoginButton() {
                 >
                     {result}
                 </span>
+
             )}
 
         </span>
