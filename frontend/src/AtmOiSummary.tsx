@@ -2,298 +2,176 @@
 import { useEffect, useState } from "react";
 import { apiUrl } from "./config/api";
 
-interface Row {
-    strike: number;
-    is_atm: boolean;
-    call_ltp: number | null;
-    put_ltp: number | null;
-    call_oi_formatted: string;
-    put_oi_formatted: string;
-    call_oi_chg: number | null;
-    put_oi_chg: number | null;
-    call_oi_pct_chg: number | null;
-    put_oi_pct_chg: number | null;
-    call_baseline_at?: string | null;
-    put_baseline_at?: string | null;
-}
-
-interface Chain {
-    atm_strike: number;
-    selected_expiry: string;
-    status: string;
-    timestamp: string;
-    strikes: Row[];
-    spot_quote_at: number;
-}
-
-const color = (n: number | null | undefined) =>
-    n == null || n === 0
-        ? "#87a1b5"
-        : n > 0
-            ? "#00d6a3"
-            : "#ff4566";
-
-const quantity = (n: number) =>
-    Math.abs(n) >= 1e7
-        ? `${(n / 1e7).toFixed(2)}Cr`
-        : `${(n / 1e5).toFixed(2)}L`;
-
-export default function AtmOiSummary({
-    expiry = "",
-    spotChange,
-}: {
+interface AtmOiSummaryProps {
+    symbol?: string;
     expiry?: string;
     spotChange?: number | null;
-}) {
-    const [data, setData] = useState<Chain | null>(null);
-    const [error, setError] = useState("");
-    const [now, setNow] = useState(Date.now());
+}
 
-    useEffect(() => {
-        const id = setInterval(() => setNow(Date.now()), 1000);
-        return () => clearInterval(id);
-    }, []);
+interface AtmOiData {
+    symbol?: string;
+    spot_price?: number;
+    atm_strike?: number;
+    selected_expiry?: string;
+    call_oi?: number | null;
+    put_oi?: number | null;
+    call_ltp?: number | null;
+    put_ltp?: number | null;
+    call_oi_chg?: number | null;
+    put_oi_chg?: number | null;
+    pcr?: number | null;
+}
+
+export default function AtmOiSummary({
+    symbol = "NIFTY",
+    expiry = "",
+    spotChange
+}: AtmOiSummaryProps) {
+    const [data, setData] = useState<AtmOiData | null>(null);
+    const [error, setError] = useState("");
+    const [loading, setLoading] = useState(true);
 
     useEffect(() => {
         let active = true;
         let timer: ReturnType<typeof setTimeout> | undefined;
         let controller: AbortController | undefined;
 
-        setData(null);
-
-        const load = async () => {
-            controller = new AbortController();
-
-            const timeout = setTimeout(() => {
-                controller?.abort();
-            }, 25000);
+        const fetchAtmOi = async () => {
+            const currentController = new AbortController();
+            controller = currentController;
 
             try {
-                const url = new URL(
-                    apiUrl("/api/options/chain"),
-                    window.location.origin
-                );
+                const url = new URL(apiUrl("/api/options/chain"));
 
+                // Fetch data for the currently selected market.
+                url.searchParams.set("symbol", symbol);
                 url.searchParams.set("num_strikes", "3");
 
                 if (expiry) {
                     url.searchParams.set("expiry", expiry);
                 }
 
-                const res = await fetch(url, {
-                    signal: controller.signal,
+                const response = await fetch(url.toString(), {
+                    signal: currentController.signal
                 });
 
-                const body = await res.json();
+                const result = await response.json();
 
-                if (!res.ok) {
+                if (!active) return;
+
+                if (!response.ok) {
                     throw new Error(
-                        typeof body.detail === "string"
-                            ? body.detail
-                            : "OI unavailable"
+                        typeof result.detail === "string"
+                            ? result.detail
+                            : "ATM OI data unavailable"
                     );
                 }
 
-                if (active) {
-                    setData(body);
-                    setError("");
-                }
-            } catch (e) {
-                if (active) {
-                    setData(null);
-                    setError(
-                        e instanceof Error ? e.message : "OI unavailable"
-                    );
+                setData(result);
+                setError("");
+            } catch (err) {
+                if (!active) return;
+
+                if (err instanceof Error && err.name !== "AbortError") {
+                    setError(err.message);
                 }
             } finally {
-                clearTimeout(timeout);
-
                 if (active) {
-                    timer = setTimeout(load, 6000);
+                    setLoading(false);
+
+                    // Refresh selected market data every 5 seconds.
+                    timer = setTimeout(fetchAtmOi, 5000);
                 }
             }
         };
 
-        void load();
+        // Clear previous market data when market or expiry changes.
+        setData(null);
+        setError("");
+        setLoading(true);
+
+        void fetchAtmOi();
 
         return () => {
             active = false;
             clearTimeout(timer);
             controller?.abort();
         };
-    }, [expiry]);
+    }, [symbol, expiry]);
 
-    const row = data?.strikes.find((r) => r.is_atm);
+    const formatValue = (value: number | null | undefined) => {
+        if (value == null || !Number.isFinite(value)) return "—";
+        return value.toLocaleString("en-IN");
+    };
 
-    const stale =
-        !!data &&
-        (data.status !== "fresh" ||
-            now / 1000 - data.spot_quote_at > 90);
+    const formatPrice = (value: number | null | undefined) => {
+        if (value == null || !Number.isFinite(value)) return "—";
+        return value.toFixed(2);
+    };
 
-    const sides = [
-        {
-            label: "CE",
-            oi: row?.call_oi_formatted,
-            ltp: row?.call_ltp,
-            change: row?.call_oi_chg,
-            pct: row?.call_oi_pct_chg,
-            baseline: row?.call_baseline_at,
-            sideColor: "#00d6a3",
-        },
-        {
-            label: "PE",
-            oi: row?.put_oi_formatted,
-            ltp: row?.put_ltp,
-            change: row?.put_oi_chg,
-            pct: row?.put_oi_pct_chg,
-            baseline: row?.put_baseline_at,
-            sideColor: "#ff4566",
-        },
-    ];
+    const formatChange = (value: number | null | undefined) => {
+        if (value == null || !Number.isFinite(value)) return "—";
+
+        return `${value > 0 ? "+" : ""}${value.toLocaleString("en-IN")}`;
+    };
 
     return (
-        <div
-            className="market-card atm-oi-card"
-            title={
-                error ||
-                `ATM OI · ${data?.selected_expiry || expiry} · Previous-session OI baseline`
-            }
-            style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 8,
-                boxSizing: "border-box",
-                overflow: "hidden",
-            }}
-        >
-            {/* LEFT: ATM STRIKE AND SPOT */}
-            <div
-                style={{
-                    flex: "0 0 38%",
-                    minWidth: 0,
-                    display: "flex",
-                    flexDirection: "column",
-                    justifyContent: "center",
-                    gap: 4,
-                }}
-            >
-                <div
-                    style={{
-                        fontSize: 9,
-                        color: "#87a1b5",
-                        fontWeight: 700,
-                        whiteSpace: "nowrap",
-                    }}
-                >
-                    ATM {stale ? "· STALE" : ""}
-                </div>
-
-                <div
-                    style={{
-                        fontSize: 18,
-                        fontWeight: 800,
-                        color: "#f1f6fc",
-                        lineHeight: 1.1,
-                        whiteSpace: "nowrap",
-                    }}
-                >
-                    {data?.atm_strike?.toLocaleString("en-IN") ?? "—"}
-                </div>
-
-                <div
-                    style={{
-                        fontSize: 10,
-                        color: color(spotChange),
-                        whiteSpace: "nowrap",
-                    }}
-                >
-                    Spot{" "}
-                    {spotChange == null
-                        ? "—"
-                        : `${spotChange > 0 ? "+" : ""}${spotChange.toFixed(2)}%`}
-                </div>
+        <div className="atm-oi-summary">
+            <div className="atm-oi-header">
+                <strong>ATM OI SUMMARY — {symbol}</strong>
+                <span>{data?.selected_expiry || expiry || "Nearest Expiry"}</span>
             </div>
 
-            {/* RIGHT: CE ABOVE, PE BELOW */}
-            <div
-                style={{
-                    flex: 1,
-                    minWidth: 0,
-                    display: "flex",
-                    flexDirection: "column",
-                    justifyContent: "center",
-                    gap: 5,
-                    borderLeft: "1px solid #1b3447",
-                    paddingLeft: 8,
-                }}
-            >
-                {sides.map((side) => (
-                    <div
-                        key={side.label}
-                        style={{
-                            display: "flex",
-                            flexDirection: "column",
-                            gap: 2,
-                            minWidth: 0,
-                        }}
-                    >
-                        <div
-                            style={{
-                                display: "flex",
-                                justifyContent: "space-between",
-                                alignItems: "center",
-                                gap: 3,
-                            }}
-                        >
-                            <strong
-                                style={{
-                                    fontSize: 10,
-                                    color: side.sideColor,
-                                }}
-                            >
-                                {side.label}
-                            </strong>
-
-                            <span
-                                style={{
-                                    fontSize: 10,
-                                    color: "#e6f0fb",
-                                    fontWeight: 600,
-                                    whiteSpace: "nowrap",
-                                }}
-                            >
-                                {side.oi || "—"}
+            {loading && !data ? (
+                <div className="muted tiny">Loading {symbol} ATM OI...</div>
+            ) : error ? (
+                <div className="muted tiny">{error}</div>
+            ) : data ? (
+                <>
+                    <div className="atm-oi-price">
+                        <span>Spot Price</span>
+                        <strong>{formatPrice(data.spot_price)}</strong>
+                        {spotChange != null && (
+                            <span className={spotChange >= 0 ? "positive" : "negative"}>
+                                {spotChange > 0 ? "+" : ""}
+                                {spotChange.toFixed(2)}
                             </span>
+                        )}
+                    </div>
+
+                    <div className="atm-oi-strike">
+                        <span>ATM STRIKE</span>
+                        <strong>{formatValue(data.atm_strike)}</strong>
+                    </div>
+
+                    <div className="atm-oi-grid">
+                        <div>
+                            <span>CALL OI</span>
+                            <strong className="negative">
+                                {formatValue(data.call_oi)}
+                            </strong>
+                            <small>LTP: {formatPrice(data.call_ltp)}</small>
+                            <small>OI Change: {formatChange(data.call_oi_chg)}</small>
                         </div>
 
-                        <div
-                            style={{
-                                display: "flex",
-                                justifyContent: "space-between",
-                                gap: 3,
-                                fontSize: 9,
-                                whiteSpace: "nowrap",
-                                color: "#87a1b5",
-                            }}
-                        >
-                            <span>
-                                LTP {side.ltp?.toFixed(2) ?? "—"}
-                            </span>
-
-                            <span
-                                style={{
-                                    color: color(side.change),
-                                }}
-                                title={`Previous-session baseline: ${side.baseline || "unavailable"}`}
-                            >
-                                {side.change == null
-                                    ? "Δ —"
-                                    : `${side.change > 0 ? "+" : ""}${quantity(side.change)}`}
-                            </span>
+                        <div>
+                            <span>PUT OI</span>
+                            <strong className="positive">
+                                {formatValue(data.put_oi)}
+                            </strong>
+                            <small>LTP: {formatPrice(data.put_ltp)}</small>
+                            <small>OI Change: {formatChange(data.put_oi_chg)}</small>
                         </div>
                     </div>
-                ))}
-            </div>
+
+                    <div className="atm-oi-pcr">
+                        <span>PCR</span>
+                        <strong>{formatPrice(data.pcr)}</strong>
+                    </div>
+                </>
+            ) : (
+                <div className="muted tiny">ATM OI data unavailable</div>
+            )}
         </div>
     );
 }

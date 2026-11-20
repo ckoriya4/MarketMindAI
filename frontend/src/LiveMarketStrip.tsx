@@ -60,8 +60,10 @@ const formatted = (card: MarketCardData) =>
 
 export default function LiveMarketStrip({
   expiry = "",
+  symbol = "NIFTY",
 }: {
   expiry?: string;
+  symbol?: string;
 }) {
   const [data, setData] = useState<MarketOverview | null>(null);
   const [error, setError] = useState("");
@@ -75,6 +77,7 @@ export default function LiveMarketStrip({
     const load = async () => {
       const current = new AbortController();
       controller = current;
+
       const timeout = setTimeout(() => current.abort(), 60000);
 
       try {
@@ -148,6 +151,7 @@ export default function LiveMarketStrip({
 
   return (
     <section className="market-strip" aria-label="Live market overview">
+
       {cards.map((card) => {
         const stale =
           requestStale ||
@@ -184,6 +188,7 @@ export default function LiveMarketStrip({
         return (
           <div className="market-card" key={card.id} title={title}>
             <div className="market-card-content">
+
               <div className="muted tiny">
                 {card.name}
                 {status && <span className="amber"> · {status}</span>}
@@ -211,12 +216,19 @@ export default function LiveMarketStrip({
                     ? "Waiting for quote"
                     : "Previous close unavailable"}
               </div>
+
             </div>
           </div>
         );
       })}
 
-      <AtmOiSummary expiry={expiry} spotChange={atmChange} />
+      {/* ATM OI SUMMARY USES SELECTED OPTION-CHAIN MARKET */}
+      <AtmOiSummary
+        symbol={symbol}
+        expiry={expiry}
+        spotChange={atmChange}
+      />
+
     </section>
   );
 }
