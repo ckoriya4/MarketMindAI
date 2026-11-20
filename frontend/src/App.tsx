@@ -584,7 +584,8 @@ export default function App() {
       />
 
       <main className="dashboard">
-        <section className="panel scanner">
+        {/* STOCK SCANNER — MOVED TO POSITION 3 */}
+        <section className="panel scanner" style={{ gridArea: "options" }}>
           <PanelTitle icon={<span className="live-dot" />}>
             NIFTY 50 STOCK SCANNER
           </PanelTitle>
@@ -764,8 +765,8 @@ export default function App() {
           </div>
         </section>
 
-        {/* DYNAMIC OPTION CHAIN & OI / PCR / SUPPORT & RESISTANCE */}
-        <div className="option-action-stack">
+        {/* OPTION BUY / SELL + OPTION CHAIN — MOVED TO POSITION 1 */}
+        <div className="option-action-stack" style={{ gridArea: "scanner" }}>
           <TradeSetupPanel
             expiry={selectedExpiry || chainData?.selected_expiry || ""}
           />
