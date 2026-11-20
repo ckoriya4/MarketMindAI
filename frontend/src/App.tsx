@@ -2,7 +2,17 @@
 import KiteLoginButton from "./KiteLoginButton";
 import TradeSetupPanel from "./TradeSetupPanel";
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
-import { Activity, Bell, BrainCircuit, RefreshCw, Search, ShieldCheck, SlidersHorizontal, UserRound, Volume2 } from "lucide-react";
+import {
+  Activity,
+  Bell,
+  BrainCircuit,
+  RefreshCw,
+  Search,
+  ShieldCheck,
+  SlidersHorizontal,
+  UserRound,
+  Volume2
+} from "lucide-react";
 import "./App.css";
 import OISignalChart, { type OILiveSnapshot } from "./OISignalChart";
 import SectorSummary from "./SectorSummary";
@@ -14,7 +24,27 @@ import WeightedSetupPanel from "./WeightedSetupPanel";
 import IndicatorCandleChart from "./IndicatorCandleChart";
 import { apiUrl } from "./config/api";
 
-const navItems = ["Dashboard", "Option Chain", "Stock Scanner", "Charts", "Signals", "News & Events", "Settings"];
+const navItems = [
+  "Dashboard",
+  "Option Chain",
+  "Stock Scanner",
+  "Charts",
+  "Signals",
+  "News & Events",
+  "Settings"
+];
+
+// Supported market selector options.
+// The backend must support each symbol before its data can load.
+const optionMarkets = [
+  { symbol: "NIFTY", label: "NIFTY 50" },
+  { symbol: "BANKNIFTY", label: "BANK NIFTY" },
+  { symbol: "FINNIFTY", label: "FINNIFTY" },
+  { symbol: "MIDCPNIFTY", label: "MIDCPNIFTY" },
+  { symbol: "NIFTYNXT50", label: "NIFTY NEXT 50" },
+  { symbol: "SENSEX", label: "SENSEX" },
+  { symbol: "BANKEX", label: "BANKEX" }
+];
 
 interface StrikeItem {
   strike: number;
@@ -100,7 +130,10 @@ export default function App() {
   const [active, setActive] = useState("Dashboard");
   const [search, setSearch] = useState("");
   const [timeframe, setTimeframe] = useState("5m");
-  const [chainMode, setChainMode] = useState("Combined");
+
+  // Selected option-chain market
+  const [selectedMarket, setSelectedMarket] = useState("NIFTY");
+
   const [tradeMode, setTradeMode] = useState("Manual");
   const [auto, setAuto] = useState(false);
   const [alerts, setAlerts] = useState(true);
@@ -119,11 +152,13 @@ export default function App() {
   const [candleStatus, setCandleStatus] = useState("Loading Kite candles…");
   const [chartIndicators, setChartIndicators] = useState<ChartIndicators | null>(null);
 
-  // Scanner quotes: uses the Kite-backed /api/market/quotes route.
+  // Scanner quotes
   const [stocks, setStocks] = useState<string[][]>([]);
   const [stockSnapshotAt, setStockSnapshotAt] = useState("");
   const [stockQuoteError, setStockQuoteError] = useState("");
-  const [stockMetadata, setStockMetadata] = useState<Record<string, { sector?: string; change_pct?: number | null }>>({});
+  const [stockMetadata, setStockMetadata] = useState<
+    Record<string, { sector?: string; change_pct?: number | null }>
+  >({});
   const [scannerSector, setScannerSector] = useState("All Sectors");
   const [scannerSort, setScannerSort] = useState("Strongest");
 
@@ -262,13 +297,32 @@ export default function App() {
     window.setTimeout(() => setNotice(""), 2600);
   };
 
+  // Market selection
+  const handleMarketChange = (symbol: string) => {
+    if (selectedMarket === symbol) return;
+
+    const market = optionMarkets.find(m => m.symbol === symbol);
+
+    // Cancel pending requests for the previous market
+    chainRequest.current++;
+
+    setSelectedMarket(symbol);
+    setSelectedExpiry("");
+    setChainData(null);
+    setChainError("");
+    setLiveOi(null);
+    setBackendOnline(false);
+
+    notify(`Switching to ${market?.label || symbol}...`);
+  };
+
   // Use the exact live OI snapshot supplied by OISignalChart.
   const handleOiUpdate = useCallback((snapshot: OILiveSnapshot | null) => {
     setLiveOi(snapshot);
   }, []);
 
   const oiSignal = useMemo(() => {
-    const oiThreshold = 1_000_000; // 10 lakh
+    const oiThreshold = 1_000_000;
     const hasFreshOi = Boolean(liveOi && liveOi.fresh);
 
     const putOI = hasFreshOi ? liveOi!.putOI : null;
@@ -331,7 +385,7 @@ export default function App() {
       ma8,
       wma8,
       maDifference,
-      hasData: hasFreshOi || (ma8 !== null && wma8 !== null),
+      hasData: hasFreshOi || (ma8 !== null && wma8 !== null)
     };
   }, [liveOi, chartIndicators]);
 
@@ -343,7 +397,8 @@ export default function App() {
       try {
         const url = new URL(apiUrl("/api/options/chain"));
 
-        url.searchParams.set("symbol", "NIFTY");
+        // Selected market is sent to the backend
+        url.searchParams.set("symbol", selectedMarket);
 
         const targetExp = exp || selectedExpiry;
 
@@ -399,7 +454,7 @@ export default function App() {
         setBackendOnline(false);
       }
     },
-    [selectedExpiry, strikeRange]
+    [selectedExpiry, strikeRange, selectedMarket]
   );
 
   const handleRefresh = async () => {
@@ -407,7 +462,9 @@ export default function App() {
 
     const exp = selectedExpiry || chainData?.selected_expiry;
 
-    notify(`Refreshed option chain (${exp || "NIFTY"}).`);
+    notify(
+      `Refreshed ${selectedMarket} option chain (${exp || "nearest expiry"}).`
+    );
 
     await fetchOptionChain(exp, strikeRange);
 
@@ -416,6 +473,7 @@ export default function App() {
     }, 600);
   };
 
+  // Poll selected market option chain
   useEffect(() => {
     let active = true;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -437,6 +495,10 @@ export default function App() {
     };
   }, [fetchOptionChain, selectedExpiry, strikeRange]);
 
+  const selectedMarketLabel =
+    optionMarkets.find(m => m.symbol === selectedMarket)?.label ||
+    selectedMarket;
+
   return (
     <div className="app">
       <header className="topbar">
@@ -444,6 +506,7 @@ export default function App() {
           <div className="brand-icon">
             <BrainCircuit size={25} />
           </div>
+
           <div>
             <div className="brand-name">MarketMind AI</div>
             <div className="brand-sub">
@@ -473,7 +536,10 @@ export default function App() {
           />
         </label>
 
-        <button className="icon-button" onClick={() => notify("Alerts active.")}>
+        <button
+          className="icon-button"
+          onClick={() => notify("Alerts active.")}
+        >
           <Bell size={17} />
           <i>3</i>
         </button>
@@ -488,10 +554,10 @@ export default function App() {
           <div className="oi-signal-lines" role="status" aria-live="polite">
             <div
               className={`oi-single-line ${oiSignal.oiType === "CALL BUY"
-                ? "call-alert"
-                : oiSignal.oiType === "PUT BUY"
-                  ? "put-alert"
-                  : "hold-alert"
+                  ? "call-alert"
+                  : oiSignal.oiType === "PUT BUY"
+                    ? "put-alert"
+                    : "hold-alert"
                 }`}
             >
               <Activity size={14} />
@@ -526,12 +592,12 @@ export default function App() {
 
             <div
               className={`oi-single-line ${oiSignal.maType === "CALL BUY"
-                ? "call-alert"
-                : oiSignal.maType === "PUT BUY"
-                  ? "put-alert"
-                  : oiSignal.maType === "EQUAL"
-                    ? "equal-alert"
-                    : "hold-alert"
+                  ? "call-alert"
+                  : oiSignal.maType === "PUT BUY"
+                    ? "put-alert"
+                    : oiSignal.maType === "EQUAL"
+                      ? "equal-alert"
+                      : "hold-alert"
                 }`}
             >
               <Activity size={14} />
@@ -568,7 +634,7 @@ export default function App() {
             {backendOnline && chainData ? (
               <span>
                 Connected to FastAPI &bull; Mode: <b>{chainData.data_mode}</b>
-                &bull; Dynamic ATM Active ({chainData.atm_strike})
+                &bull; {selectedMarketLabel} ATM Active ({chainData.atm_strike})
               </span>
             ) : (
               <span>
@@ -584,7 +650,7 @@ export default function App() {
       />
 
       <main className="dashboard">
-        {/* STOCK SCANNER — MOVED TO POSITION 3 */}
+        {/* STOCK SCANNER — POSITION 3 */}
         <section className="panel scanner" style={{ gridArea: "options" }}>
           <PanelTitle icon={<span className="live-dot" />}>
             NIFTY 50 STOCK SCANNER
@@ -694,6 +760,7 @@ export default function App() {
           />
         </section>
 
+        {/* LIVE CHART */}
         <section className="panel chart-panel">
           <OISignalChart
             expiry={selectedExpiry || chainData?.selected_expiry || ""}
@@ -713,7 +780,7 @@ export default function App() {
               />
             }
           >
-            NIFTY 50 — Candles
+            {selectedMarketLabel} — Candles
           </PanelTitle>
 
           <div className="toolbar">
@@ -730,7 +797,7 @@ export default function App() {
 
           <div className="chart-meta">
             <strong>
-              {chartIndicators?.instrument || "NIFTY"} · {timeframe}
+              {chartIndicators?.instrument || selectedMarket} · {timeframe}
             </strong>
 
             <span className={
@@ -765,7 +832,7 @@ export default function App() {
           </div>
         </section>
 
-        {/* OPTION BUY / SELL + OPTION CHAIN — MOVED TO POSITION 1 */}
+        {/* OPTION BUY / SELL + OPTION CHAIN */}
         <div className="option-action-stack" style={{ gridArea: "scanner" }}>
           <TradeSetupPanel
             expiry={selectedExpiry || chainData?.selected_expiry || ""}
@@ -773,19 +840,36 @@ export default function App() {
 
           <section className="panel options">
             <PanelTitle icon={<span className="live-dot" />}>
-              OPTION CHAIN — {
+              OPTION CHAIN — {selectedMarketLabel} {
                 chainData?.selected_expiry
-                  ? `${chainData.selected_expiry} (${chainData.days_to_expiry ?? 0} DTE)`
-                  : "NIFTY 50"
+                  ? `· ${chainData.selected_expiry} (${chainData.days_to_expiry ?? 0} DTE)`
+                  : ""
               }
             </PanelTitle>
+
+            {/* HORIZONTAL MARKET SELECTOR */}
+            <div className="market-selector">
+              {optionMarkets.map(market => (
+                <button
+                  key={market.symbol}
+                  type="button"
+                  className={
+                    selectedMarket === market.symbol
+                      ? "market-tab active"
+                      : "market-tab"
+                  }
+                  onClick={() => handleMarketChange(market.symbol)}
+                >
+                  {market.label}
+                </button>
+              ))}
+            </div>
 
             <div className="chain-controls">
               <select
                 value={selectedExpiry || (chainData?.selected_expiry ?? "")}
                 onChange={e => {
                   setSelectedExpiry(e.target.value);
-                  fetchOptionChain(e.target.value, strikeRange);
                 }}
               >
                 {chainData?.available_expiries ? (
@@ -793,7 +877,7 @@ export default function App() {
                     <option key={exp} value={exp}>{exp}</option>
                   ))
                 ) : (
-                  <option>Loading expiries...</option>
+                  <option value="">Loading expiries...</option>
                 )}
               </select>
 
@@ -802,7 +886,6 @@ export default function App() {
                 onChange={e => {
                   const r = Number(e.target.value);
                   setStrikeRange(r);
-                  fetchOptionChain(selectedExpiry, r);
                 }}
               >
                 <option value={5}>±5 Strikes</option>
@@ -818,21 +901,12 @@ export default function App() {
                 disabled={isRefreshing}
                 title="Refresh option chain data"
               >
-                <RefreshCw size={11} className={isRefreshing ? "spin" : ""} />
+                <RefreshCw
+                  size={11}
+                  className={isRefreshing ? "spin" : ""}
+                />
                 <span>{isRefreshing ? "Syncing..." : "Refresh"}</span>
               </button>
-            </div>
-
-            <div className="segmented">
-              {["Combined", "Calls", "Puts"].map(x => (
-                <button
-                  key={x}
-                  className={chainMode === x ? "selected" : ""}
-                  onClick={() => setChainMode(x)}
-                >
-                  {x}
-                </button>
-              ))}
             </div>
 
             <div className="muted tiny" role="status">
@@ -847,15 +921,16 @@ export default function App() {
               OI Chg%: versus previous trading-session close. Dash = baseline loading/unavailable.
             </div>
 
+            {/* COMBINED CALL + PUT OPTION CHAIN */}
             <div className="table-scroll">
               <table className="option-table">
                 <thead>
                   <tr>
-                    {chainMode !== "Puts" && <th>CALL OI (Chg%)</th>}
-                    {chainMode !== "Puts" && <th>LTP</th>}
+                    <th>CALL OI (Chg%)</th>
+                    <th>LTP</th>
                     <th>STRIKE</th>
-                    {chainMode !== "Calls" && <th>LTP</th>}
-                    {chainMode !== "Calls" && <th>PUT OI (Chg%)</th>}
+                    <th>LTP</th>
+                    <th>PUT OI (Chg%)</th>
                     <th>PCR / OI DEPTH</th>
                   </tr>
                 </thead>
@@ -873,45 +948,41 @@ export default function App() {
 
                       return (
                         <tr key={s.strike} className={rowClass}>
-                          {chainMode !== "Puts" && (
-                            <td className={`oi-cell ${s.call_oi_chg == null
+                          <td className={`oi-cell ${s.call_oi_chg == null
                               ? "muted"
                               : s.call_oi_chg > 0
                                 ? "positive"
                                 : s.call_oi_chg < 0
                                   ? "negative"
                                   : "muted"
-                              }`}>
-                              <span>
-                                {s.call_oi_formatted}{" "}
-                                <small>
-                                  ({(s.call_oi_pct_chg ?? 0) > 0 ? "+" : ""}
-                                  {s.call_oi_pct_chg == null
-                                    ? "—"
-                                    : `${s.call_oi_pct_chg}%`})
-                                </small>
-                              </span>
+                            }`}>
+                            <span>
+                              {s.call_oi_formatted}{" "}
+                              <small>
+                                ({(s.call_oi_pct_chg ?? 0) > 0 ? "+" : ""}
+                                {s.call_oi_pct_chg == null
+                                  ? "—"
+                                  : `${s.call_oi_pct_chg}%`})
+                              </small>
+                            </span>
 
-                              <div className="oi-bar-wrap">
-                                <div
-                                  className="oi-bar call"
-                                  style={{
-                                    width: `${s.call_bar_pct}%`,
-                                    background:
-                                      s.call_oi_chg == null || s.call_oi_chg === 0
-                                        ? "#698494"
-                                        : s.call_oi_chg > 0
-                                          ? "#00d6a3"
-                                          : "#ff4566"
-                                  }}
-                                />
-                              </div>
-                            </td>
-                          )}
+                            <div className="oi-bar-wrap">
+                              <div
+                                className="oi-bar call"
+                                style={{
+                                  width: `${s.call_bar_pct}%`,
+                                  background:
+                                    s.call_oi_chg == null || s.call_oi_chg === 0
+                                      ? "#698494"
+                                      : s.call_oi_chg > 0
+                                        ? "#00d6a3"
+                                        : "#ff4566"
+                                }}
+                              />
+                            </div>
+                          </td>
 
-                          {chainMode !== "Puts" && (
-                            <td>{s.call_ltp?.toFixed(2) ?? "—"}</td>
-                          )}
+                          <td>{s.call_ltp?.toFixed(2) ?? "—"}</td>
 
                           <td className="strike">
                             {s.strike}
@@ -920,45 +991,41 @@ export default function App() {
                             {s.is_support && <span className="badge-sup">S1</span>}
                           </td>
 
-                          {chainMode !== "Calls" && (
-                            <td>{s.put_ltp?.toFixed(2) ?? "—"}</td>
-                          )}
+                          <td>{s.put_ltp?.toFixed(2) ?? "—"}</td>
 
-                          {chainMode !== "Calls" && (
-                            <td className={`oi-cell ${s.put_oi_chg == null
+                          <td className={`oi-cell ${s.put_oi_chg == null
                               ? "muted"
                               : s.put_oi_chg > 0
                                 ? "positive"
                                 : s.put_oi_chg < 0
                                   ? "negative"
                                   : "muted"
-                              }`}>
-                              <span>
-                                {s.put_oi_formatted}{" "}
-                                <small>
-                                  ({(s.put_oi_pct_chg ?? 0) > 0 ? "+" : ""}
-                                  {s.put_oi_pct_chg == null
-                                    ? "—"
-                                    : `${s.put_oi_pct_chg}%`})
-                                </small>
-                              </span>
+                            }`}>
+                            <span>
+                              {s.put_oi_formatted}{" "}
+                              <small>
+                                ({(s.put_oi_pct_chg ?? 0) > 0 ? "+" : ""}
+                                {s.put_oi_pct_chg == null
+                                  ? "—"
+                                  : `${s.put_oi_pct_chg}%`})
+                              </small>
+                            </span>
 
-                              <div className="oi-bar-wrap">
-                                <div
-                                  className="oi-bar put"
-                                  style={{
-                                    width: `${s.put_bar_pct}%`,
-                                    background:
-                                      s.put_oi_chg == null || s.put_oi_chg === 0
-                                        ? "#698494"
-                                        : s.put_oi_chg > 0
-                                          ? "#00d6a3"
-                                          : "#ff4566"
-                                  }}
-                                />
-                              </div>
-                            </td>
-                          )}
+                            <div className="oi-bar-wrap">
+                              <div
+                                className="oi-bar put"
+                                style={{
+                                  width: `${s.put_bar_pct}%`,
+                                  background:
+                                    s.put_oi_chg == null || s.put_oi_chg === 0
+                                      ? "#698494"
+                                      : s.put_oi_chg > 0
+                                        ? "#00d6a3"
+                                        : "#ff4566"
+                                }}
+                              />
+                            </div>
+                          </td>
 
                           <td>
                             <div style={{
@@ -1081,6 +1148,7 @@ export default function App() {
           </section>
         </div>
 
+        {/* TRADING CONTROL */}
         <section className="panel trading">
           <PanelTitle>TRADING CONTROL</PanelTitle>
 
@@ -1167,9 +1235,10 @@ export default function App() {
           </h3>
 
           <div className="order-row">
-            <select>
-              <option>NIFTY 50</option>
-              <option>BANK NIFTY</option>
+            <select value={selectedMarket} onChange={e => handleMarketChange(e.target.value)}>
+              {optionMarkets.map(m => (
+                <option key={m.symbol} value={m.symbol}>{m.label}</option>
+              ))}
             </select>
 
             <select>
@@ -1195,8 +1264,8 @@ export default function App() {
 
           <div className="order-row">
             <select>
-              <option>{chainData?.atm_strike ?? 22850}</option>
-              <option>{(chainData?.atm_strike ?? 22850) + 50}</option>
+              <option>{chainData?.atm_strike ?? "ATM Strike"}</option>
+              <option>{(chainData?.atm_strike ?? 0) + 50}</option>
             </select>
 
             <input
