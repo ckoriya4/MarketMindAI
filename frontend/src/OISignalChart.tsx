@@ -1,5 +1,4 @@
 
-import { oiDifferences } from "./oiDifference.js";
 import { useEffect, useRef, useState } from "react";
 import {
   createChart,
@@ -71,9 +70,16 @@ export interface OILiveSnapshot {
 type LineKey =
   | "put"
   | "call"
-  | "average"
-  | "absolutePut"
-  | "absoluteCall";
+  | "average";
+
+type ChartWindow = "3s" | "5s" | "3m" | "5m";
+
+const chartWindowSeconds: Record<ChartWindow, number> = {
+  "3s": 3,
+  "5s": 5,
+  "3m": 180,
+  "5m": 300
+};
 
 interface AxisButton {
   key: LineKey;
@@ -118,12 +124,6 @@ export default function OISignalChart({
 
   const hoverAtm = useRef(new Map<number, number>());
   const pairs = useRef(new Map<number, Pair>());
-  const absolutePut = useRef<ISeriesApi<"Line"> | null>(null);
-  const absoluteCall = useRef<ISeriesApi<"Line"> | null>(null);
-
-  const differenceAt = useRef(
-    new Map<number, { put: number | null; call: number | null }>()
-  );
 
   const rendered = useRef("");
   const fitted = useRef("");
@@ -131,9 +131,7 @@ export default function OISignalChart({
   const [visible, setVisible] = useState<Record<LineKey, boolean>>({
     put: true,
     call: true,
-    average: true,
-    absolutePut: true,
-    absoluteCall: true
+    average: true
   });
 
   const [axisButtons, setAxisButtons] = useState<AxisButton[]>([]);
@@ -151,6 +149,7 @@ export default function OISignalChart({
 
   const [crosses, setCrosses] = useState<OICrossover[]>([]);
   const [mode, setMode] = useState<"total" | "change">("total");
+  const [chartWindow, setChartWindow] = useState<ChartWindow>("5m");
 
   const [hover, setHover] = useState<{
     time: number;
@@ -181,7 +180,7 @@ export default function OISignalChart({
       },
       timeScale: {
         timeVisible: true,
-        secondsVisible: false,
+        secondsVisible: true,
         tickMarkFormatter: (t: Time) => istTime(Number(t)),
         borderColor: "#1b3447"
       },
@@ -198,36 +197,6 @@ export default function OISignalChart({
     c.priceScale("left").applyOptions({
       visible: true,
       borderColor: "#a974ed"
-    });
-
-    absolutePut.current = c.addSeries(LineSeries, {
-      color: "#bd83ff",
-      lineWidth: 2,
-      pointMarkersVisible: false,
-      priceScaleId: "left",
-      title: "Absolute Put",
-      lastValueVisible: true,
-      priceLineVisible: false,
-      priceFormat: {
-        type: "price",
-        precision: 0,
-        minMove: 1
-      }
-    });
-
-    absoluteCall.current = c.addSeries(LineSeries, {
-      color: "#00bfff",
-      lineWidth: 2,
-      pointMarkersVisible: false,
-      priceScaleId: "left",
-      title: "Absolute Call",
-      lastValueVisible: true,
-      priceLineVisible: false,
-      priceFormat: {
-        type: "price",
-        precision: 0,
-        minMove: 1
-      }
     });
 
     scrollbar.current = attachChartScrollbar(c, scrollEl.current);
@@ -272,10 +241,6 @@ export default function OISignalChart({
     let active = true;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let controller: AbortController | undefined;
-
-    absolutePut.current?.setData([]);
-    absoluteCall.current?.setData([]);
-    differenceAt.current.clear();
 
     setData(null);
     setError("");
@@ -420,43 +385,6 @@ export default function OISignalChart({
       pairs.current.clear();
       rendered.current = key;
     }
-
-    const changes = oiDifferences(data.points);
-
-    differenceAt.current = new Map(
-      changes.map(p => [
-        p.time,
-        { put: p.put, call: p.call }
-      ])
-    );
-
-    absolutePut.current?.setData(
-      sessionData(
-        changes.map(p =>
-          p.put == null
-            ? { time: p.time as UTCTimestamp }
-            : {
-              time: p.time as UTCTimestamp,
-              value: p.put
-            }
-        ),
-        data.session
-      )
-    );
-
-    absoluteCall.current?.setData(
-      sessionData(
-        changes.map(p =>
-          p.call == null
-            ? { time: p.time as UTCTimestamp }
-            : {
-              time: p.time as UTCTimestamp,
-              value: p.call
-            }
-        ),
-        data.session
-      )
-    );
 
     const linked = continuousChanges(data.points);
 
@@ -647,6 +575,24 @@ export default function OISignalChart({
     setHover(null);
   }, [data, mode]);
 
+  // The API continues polling every 3 seconds. This control changes the
+  // visible chart window without changing the backend sampling frequency.
+  useEffect(() => {
+    const c = chart.current;
+    if (!c || !data?.latest?.time) return;
+
+    const to = Math.floor(data.latest.time) as UTCTimestamp;
+    const seconds = chartWindowSeconds[chartWindow];
+    const from = Math.max(
+      Math.floor(data.session.open),
+      Math.floor(data.latest.time - seconds)
+    ) as UTCTimestamp;
+
+    if (Number(to) > Number(from)) {
+      c.timeScale().setVisibleRange({ from, to });
+    }
+  }, [data, chartWindow]);
+
   // Draw crossover intersections.
   useEffect(() => {
     const c = chart.current;
@@ -748,7 +694,6 @@ export default function OISignalChart({
     if (!pair) return;
 
     const latest = continuousChanges(data.points).at(-1);
-    const absolute = oiDifferences(data.points).at(-1);
 
     const defs: {
       key: LineKey;
@@ -792,22 +737,6 @@ export default function OISignalChart({
               : latest
                 ? (latest.put_change + latest.call_change) / 2
                 : null
-        },
-        {
-          key: "absolutePut",
-          name: "Absolute Put",
-          color: "#bd83ff",
-          side: "left",
-          series: absolutePut.current,
-          value: absolute?.put ?? null
-        },
-        {
-          key: "absoluteCall",
-          name: "Absolute Call",
-          color: "#00bfff",
-          side: "left",
-          series: absoluteCall.current,
-          value: absolute?.call ?? null
         }
       ];
 
@@ -938,10 +867,6 @@ export default function OISignalChart({
     };
   }, [data, mode, visible, crosses]);
 
-  const latestDifference = data
-    ? oiDifferences(data.points).at(-1)
-    : undefined;
-
   const linkedLatest = data
     ? continuousChanges(data.points).at(-1)
     : undefined;
@@ -1010,14 +935,14 @@ export default function OISignalChart({
               : "oi-pending"
           }`}
       >
-        <div>
-          <strong>{bias}</strong>
-          <small>
+        <div className="oi-signal-main">
+          <strong>
             {stale
-              ? "Waiting for a complete fresh basket"
-              : mode === "total"
-                ? "Total OI · direct sum of 3 contracts per side"
-                : "Direct ΔOI sum · ATM + first + second"}
+              ? "WAITING FOR LIVE DATA"
+              : `${bias} ${number(data.anchor)}`}
+          </strong>
+          <small>
+            Expiry: {data?.expiry || expiry || "—"}
           </small>
         </div>
 
@@ -1044,13 +969,51 @@ export default function OISignalChart({
         </select>
       </div>
 
+      <div
+        className="oi-time-window"
+        role="group"
+        aria-label="Chart time window"
+        style={{
+          display: "flex",
+          alignItems: "center",
+          flexWrap: "wrap",
+          gap: 6,
+          padding: "5px 0 8px"
+        }}
+      >
+        <small style={{ color: "#9cb0c6", marginRight: 3 }}>
+          View:
+        </small>
+        {(["3s", "5s", "3m", "5m"] as ChartWindow[]).map(window => (
+          <button
+            key={window}
+            type="button"
+            aria-pressed={chartWindow === window}
+            onClick={() => setChartWindow(window)}
+            style={{
+              border: `1px solid ${chartWindow === window ? "#35c7ff" : "#29465b"}`,
+              borderRadius: 4,
+              background: chartWindow === window ? "#12364b" : "#091a27",
+              color: chartWindow === window ? "#65d5ff" : "#a9bfd0",
+              padding: "4px 10px",
+              fontSize: 11,
+              fontWeight: chartWindow === window ? 700 : 500,
+              cursor: "pointer"
+            }}
+          >
+            {window}
+          </button>
+        ))}
+        <small style={{ color: "#71899d", marginLeft: 4 }}>
+          Auto refresh: 3 sec
+        </small>
+      </div>
+
       <div className="oi-legend">
         {([
           ["put", mode === "total" ? "Put sum" : "Put ΔOI", "#00d6a3"],
           ["call", mode === "total" ? "Call sum" : "Call ΔOI", "#ff4566"],
-          ["average", "Average", "#ffdd00"],
-          ["absolutePut", "Absolute Put", "#bd83ff"],
-          ["absoluteCall", "Absolute Call", "#00bfff"]
+          ["average", "Average", "#ffdd00"]
         ] as [LineKey, string, string][]).map(
           ([key, label, color]) => (
             <button
@@ -1185,48 +1148,7 @@ export default function OISignalChart({
             </span>
             <br />
 
-            <span style={{ color: "#bd83ff" }}>
-              Absolute Put: {
-                differenceAt.current.get(hover.time)?.put != null
-                  ? number(differenceAt.current.get(hover.time)!.put!)
-                  : "—"
-              }
-            </span>
-            <br />
-
-            <span style={{ color: "#00bfff" }}>
-              Absolute Call: {
-                differenceAt.current.get(hover.time)?.call != null
-                  ? number(differenceAt.current.get(hover.time)!.call!)
-                  : "—"
-              }
-            </span>
           </div>
-        )}
-      </div>
-
-      <div className="oi-caption">
-        Five lines: Put sum, Call sum and yellow average on the right axis.
-        Absolute Put (purple) and Absolute Call (blue), left axis: each side
-        = OI from 15 minutes earlier − current OI. Positive = OI decreased;
-        negative = OI increased. Same ATM basket only; missing 15-minute
-        history → gap.
-      </div>
-
-      <div className="oi-caption">
-        Fifteen-minute comparison uses the last actual observation in each
-        minute bucket, with no forward fill.{" "}
-        {latestDifference && (
-          <>
-            Absolute Put (15m):{" "}
-            {latestDifference.put == null
-              ? "—"
-              : number(latestDifference.put)}{" "}
-            · Absolute Call (15m):{" "}
-            {latestDifference.call == null
-              ? "—"
-              : number(latestDifference.call)}
-          </>
         )}
       </div>
 
@@ -1259,10 +1181,10 @@ export default function OISignalChart({
 
         <br />
 
-        Circled × shows an estimated line intersection; arrow shows the
+        {/* Circled × shows an estimated line intersection; arrow shows the
         confirming observation. Markers use completed displayed minutes;
         label time is the confirming observation, not an exact intraminute
-        intersection. Historical markers are not current trade recommendations.
+        intersection. Historical markers are not current trade recommendations. */}
       </div>
 
       <div className="oi-values">
@@ -1279,34 +1201,6 @@ export default function OISignalChart({
             ·{" "}
             <span style={{ color: "#ffdd00" }}>
               Average: {number((shown.a + shown.b) / 2)}
-            </span>{" "}
-            ·{" "}
-            <span style={{ color: "#bd83ff" }}>
-              Absolute Put: {
-                (hover
-                  ? differenceAt.current.get(hover.time)?.put
-                  : latestDifference?.put) != null
-                  ? number(
-                    (hover
-                      ? differenceAt.current.get(hover.time)?.put
-                      : latestDifference?.put)!
-                  )
-                  : "—"
-              }
-            </span>{" "}
-            ·{" "}
-            <span style={{ color: "#00bfff" }}>
-              Absolute Call: {
-                (hover
-                  ? differenceAt.current.get(hover.time)?.call
-                  : latestDifference?.call) != null
-                  ? number(
-                    (hover
-                      ? differenceAt.current.get(hover.time)?.call
-                      : latestDifference?.call)!
-                  )
-                  : "—"
-              }
             </span>
           </>
         ) : (
