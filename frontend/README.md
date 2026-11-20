@@ -1,147 +1,179 @@
-1. High-Level Project Directory Structure
-text
 MarketMindAI/
-├── run.bat                          # One-click Windows runner (starts backend + frontend)
+├── run.bat                          # One-click Windows runner (starts Backend + Frontend)
 ├── run_all.bat                      # Runs run_all.py helper
 ├── run_all.py                       # Automated token validation & option-chain fetcher
 ├── run_kite_fetch.bat               # Interactive Kite Connect login & fetch script
-├── latest_nifty_chain.json          # Cached snapshot of NIFTY option-chain data
-├── .venv/                           # Python 3.13 virtual environment
+├── latest_nifty_chain.json          # Cached fallback snapshot of NIFTY option-chain data
+├── latest_chain.json                # Legacy cached option-chain snapshot
 │
-├── backend/                         # FastAPI REST & WebSocket Backend
-│   ├── .env                         # API credentials (KITE_API_KEY, KITE_ACCESS_TOKEN, news feeds)
-│   ├── .env.example                 # Environment template
-│   ├── requirements.txt             # Python dependencies
-│   ├── main.py                      # FastAPI app entry point, routing & middleware
-│   ├── nifty50.csv                  # Official constituent list (50 companies & sectors)
-│   ├── kite_login.py                # Standalone Kite token generation helper
-│   ├── run_kite_fetch.py            # CLI script to fetch chain using Kite
-│   └── services/                    # Core business logic & trading intelligence engines
-│       ├── kite_client.py           # KiteConnect session manager & connection status
-│       ├── kite_login.py            # Automated/interactive browser-based Kite auth
-│       ├── kite_stream.py           # WebSocket live market quote streamer
-│       ├── option_chain.py          # Dynamic ATM ladder, PCR, support/resistance levels
-│       ├── option_model.py          # Black-Scholes Greeks (Delta, Gamma, Theta, IV)
-│       ├── chart_service.py         # Multi-timeframe candlestick & historical data service
+├── backend/                         # FastAPI Python Backend
+│   ├── main.py                      # Master API entry point, route definitions, and CORS setup
+│   ├── nifty50.csv                  # Official constituent list (50 companies, sectors, ISINs)
+│   ├── requirements.txt             # Python backend dependencies
+│   ├── .env                         # API credentials (KITE_API_KEY, KITE_ACCESS_TOKEN, RSS URLs)
+│   ├── .env.example                 # Template for environment variables
+│   ├── run_kite_fetch.py            # CLI helper to fetch live chain using Kite
+│   │
+│   ├── data/                        # Local SQLite databases for historical tracking & cache
+│   │   ├── direct-sum-oi-graph.sqlite3
+│   │   ├── mcx-crude-quotes.sqlite3
+│   │   ├── news-headlines.sqlite3
+│   │   ├── oi-pro-alerts.sqlite3
+│   │   ├── oi-signals.sqlite3
+│   │   ├── option-oi-baselines.sqlite3
+│   │   ├── previous-close-oi.sqlite3
+│   │   ├── sector-oi.sqlite3
+│   │   ├── sector-oi-v2.sqlite3
+│   │   ├── sector-session-v3.sqlite3
+│   │   ├── weighted-oi-graph.sqlite3
+│   │   └── weighted-setups.sqlite3
+│   │
+│   └── services/                    # Trading engines & business logic
+│       ├── kite_client.py           # Kite Connect client initialization & status manager
+│       ├── kite_login.py            # Headless / browser-based Zerodha authentication
+│       ├── kite_stream.py           # Real-time WebSocket quote streaming service
+│       ├── option_chain.py          # Dynamic ATM ladder, strike PCR, S1/R1 calculations
+│       ├── option_model.py          # Black-Scholes Greeks engine (IV, Delta, Theta, Gamma)
+│       ├── chart_service.py         # Multi-timeframe historical candlestick data service
 │       ├── chart_indicators.py      # Technical indicator engine (EMA, RSI, MACD, Bollinger, ATR)
-│       ├── oi_signal.py             # Live Open Interest crossover & difference calculations
+│       ├── oi_signal.py             # Open Interest crossover and Call/Put divergence calculations
 │       ├── dynamic_oi.py            # Dynamic multi-strike OI aggregation
-│       ├── previous_oi.py           # Day-over-day OI change & baseline tracker
-│       ├── oi_percent_reference.py  # % OI change reference engine
-│       ├── oi_pro_rules.py          # Proprietary OI rule evaluator (Long Buildup, Short Covering)
-│       ├── confluence_service.py    # Multi-factor confluence score engine (A/B score)
-│       ├── weighted_setup.py        # 4-condition weighted trading setup generator
-│       ├── trade_setups.py          # Rule-based buy/sell/wait setups
-│       ├── sector_oi.py             # Sector-wise aggregated Open Interest calculations
-│       ├── sector_recording.py      # Background recorder for sector trends
-│       ├── session_recorder.py      # Historical session & tick capture engine
-│       ├── direct_alerts.py         # In-memory alerts & push triggers
-│       ├── live_crude.py            # MCX Crude Oil futures tracking service
-│       ├── energy_service.py        # Crude & energy correlation engine
-│       ├── market_overview.py       # Indices spot overview (Nifty, BankNifty, Sensex, VIX)
-│       ├── market_session.py        # Indian market hours & holiday calendar filter
-│       ├── market_news.py           # Live financial news collector (ET, Mint, BSE)
-│       ├── global_news.py           # Macro / global sentiment processor
-│       ├── news_analysis.py         # NLP sentiment classifier for headlines
-│       └── news_entities.py         # Entity extraction (tagging stocks mentioned in news)
+│       ├── previous_oi.py           # Day-over-day baseline OI comparator
+│       ├── oi_percent_reference.py  # % OI change reference tracker
+│       ├── oi_pro_rules.py          # Proprietary rules engine (Long Buildup, Short Covering, etc.)
+│       ├── confluence_service.py    # Multi-factor confluence scoring engine (0-100 A/B score)
+│       ├── weighted_setup.py        # 4-condition weighted setup evaluator
+│       ├── trade_setups.py          # Automated signal generation (BUY / SELL / WAIT)
+│       ├── sector_oi.py             # Sector-wise Open Interest aggregation
+│       ├── sector_recording.py      # Background recorder for sector OI trends
+│       ├── session_recorder.py      # Session tick and state capture engine
+│       ├── direct_alerts.py         # In-memory alert publisher & notification trigger
+│       ├── live_crude.py            # MCX Crude Oil futures quote fetcher
+│       ├── energy_service.py        # Energy & Crude correlation analytics
+│       ├── market_overview.py       # Spot index overview (NIFTY, BANKNIFTY, SENSEX, INDIA VIX)
+│       ├── market_session.py        # Indian market schedule & holiday filter
+│       ├── market_news.py           # Financial news RSS collector (ET, Mint, BSE)
+│       ├── global_news.py           # Global macro sentiment parser
+│       ├── news_analysis.py         # Sentiment classification of news headlines
+│       ├── news_entities.py         # Stock entity extraction from news stories
+│       └── stock_option_data.py     # Individual stock option chain analytics
 │
 ├── frontend/                        # React 19 + TypeScript + Vite Dashboard
-│   ├── package.json                 # Node dependencies (lightweight-charts, lucide-react)
-│   ├── vite.config.ts               # Vite configuration
-│   ├── tsconfig.json                # TypeScript compiler config
 │   ├── index.html                   # HTML entry point
-│   └── src/
-│       ├── main.tsx                 # React DOM mount point
-│       ├── App.tsx                  # Master Dashboard layout & tab routing
-│       ├── App.css                  # Global themes, tables, cards, layout styling
-│       ├── nifty50.ts               # NIFTY 50 symbol array helper
+│   ├── package.json                 # Node dependencies (lightweight-charts, lucide-react, etc.)
+│   ├── vite.config.ts               # Vite build & development server configuration
+│   ├── tsconfig.json                # TypeScript compiler configuration
+│   ├── .env.development             # Frontend environment variables
+│   │
+│   └── src/                         # React UI Components & Client State
+│       ├── main.tsx                 # React app bootstrapping & DOM mounting
+│       ├── App.tsx                  # Master dashboard container, layout, and tabs
+│       ├── App.css                  # Global styles, dashboard grids, colors, and animations
+│       ├── nifty50.ts               # Complete list of 50 NIFTY constituent symbols
+│       ├── index.css                # Base reset styling
 │       │
 │       ├── LiveMarketStrip.tsx      # Top ticker strip (Nifty, BankNifty, Sensex, VIX, Crude)
-│       ├── SectorSummary.tsx        # Nifty 50 constituent scanner with sector filter & sorting
-│       ├── SectorSummary.css        # Stock scanner styling
+│       ├── SectorSummary.tsx        # NIFTY 50 Stock Scanner table with sector filter & sorting
+│       ├── SectorSummary.css        # Styles for the stock scanner table
 │       │
-│       ├── IndicatorCandleChart.tsx # Lightweight-Charts interactive candlestick chart
-│       ├── IndicatorCandleChart.css # Chart pane & indicator overlays
-│       ├── OISignalChart.tsx        # Call vs. Put OI crossover chart
-│       ├── AtmOiSummary.tsx         # Real-time ATM Strike OI balance card
-│       ├── AtmOiCard.css            # ATM card styling
+│       ├── IndicatorCandleChart.tsx # Interactive candlestick chart with EMAs & RSI overlays
+│       ├── IndicatorCandleChart.css # Styles for chart panes and indicator legends
+│       ├── OISignalChart.tsx        # Multi-strike Put vs Call OI divergence chart
+│       ├── AtmOiSummary.tsx         # Real-time ATM strike shift & OI distribution widget
+│       ├── AtmOiCard.css            # Styles for ATM OI cards
 │       │
-│       ├── LiveConfluencePanel.tsx  # Multi-factor confluence scoring panel
-│       ├── WeightedSetupPanel.tsx   # 4-condition setup validator
-│       ├── WeightedSetupPanel.css   # Weighted setup panel styling
-│       ├── TradeSetupPanel.tsx      # Automated Trade signals panel
-│       ├── TradeSetupPanel.css      # Signals styling
-│       ├── OIProSignalPanel.tsx     # Pro OI analysis & trend detection
-│       ├── OIProSignalPanel.css     # Pro OI styling
+│       ├── LiveConfluencePanel.tsx  # Confluence gauge panel (A/B score & market bias)
+│       ├── WeightedSetupPanel.tsx   # 4-condition trade setup validator
+│       ├── WeightedSetupPanel.css   # Styles for weighted setups
+│       ├── TradeSetupPanel.tsx      # Real-time trade recommendations panel
+│       ├── TradeSetupPanel.css      # Styles for trade signals
+│       ├── OIProSignalPanel.tsx     # Institutional buildup/unwinding signals
+│       ├── OIProSignalPanel.css     # Styles for Pro OI signals
 │       │
-│       ├── LiveCrudeOilPanel.tsx    # MCX Crude oil live price card
+│       ├── LiveCrudeOilPanel.tsx    # Live MCX Crude Oil futures quote card
 │       ├── CrudePriceChart.tsx      # Crude price trend chart
 │       ├── EnergyPanels.tsx         # Energy market correlation breakdown
-│       ├── EnergyPanels.css         # Energy styling
+│       ├── EnergyPanels.css         # Styles for energy components
+│       ├── SectorOIGraph.tsx        # Sector-wise visual graph of Call vs. Put OI
+│       ├── SectorOIGraph.css        # Styles for sector graphs
 │       │
-│       ├── DirectAlertPanel.tsx     # Direct actionable notifications
-│       ├── DirectAlertPanel.css     # Alerts styling
-│       ├── OICrossoverAlerts.tsx    # OI crossover detection badges
-│       ├── OIStatusNotification.tsx # System status toast notification
-│       ├── KiteLoginButton.tsx      # One-click Kite Connect login trigger
+│       ├── DirectAlertPanel.tsx     # Active notifications & trade alerts panel
+│       ├── DirectAlertPanel.css     # Styles for alert boxes
+│       ├── OICrossoverAlerts.tsx    # Strike-level crossover notification badges
+│       ├── OIStatusNotification.tsx # System status toast notification popup
+│       ├── KiteLoginButton.tsx      # One-click Kite Connect login modal trigger
 │       │
-│       ├── marketSession.ts         # Trading session helper (market open/close status)
+│       ├── config/api.ts            # API base URL and client configuration
+│       ├── marketSession.ts         # Market hours helper (09:15 to 15:30 IST detection)
 │       ├── dynamicSeries.ts         # Dynamic chart series helper
 │       ├── chartScrollbar.js        # Custom chart horizontal scrollbar controller
 │       ├── continuousOi.js          # Continuous OI streaming utility
-│       ├── oiDifference.js          # Call-Put difference algorithms
-│       └── oiAlertStore.ts          # Alert state management store
+│       ├── oiDifference.js          # Call-Put net difference algorithms
+│       ├── oiAlertStore.ts          # State store for alerts
+│       ├── sectorData.ts            # Sector grouping definitions and mappings
+│       ├── sectorLineData.js        # Sector line chart coordinate generator
+│       └── sumOiAlert.mjs           # Aggregate OI threshold alert calculator
 │
-└── tests/                           # Python Backend Test Suites
-    ├── test_chart_service.py        # Unit tests for chart data & indicators
-    ├── test_confluence.py           # Tests for A/B confluence scoring
-    └── test_oi_signal.py            # Tests for OI signal generation
-2. Backend Files Detailed Breakdown
-backend/main.py
+└── tests/                           # Unit & Integration Tests
+    ├── test_chart_service.py        # Tests for historical candle generation & technical indicators
+    ├── test_confluence.py           # Tests for A/B confluence scoring logic
+    └── test_oi_signal.py            # Tests for Open Interest signals and crossover math
 
-The central hub of the application:
 
-Initializes FastAPI, sets up CORS policies for the Vite frontend (http://localhost:5173), and configures application lifespan hooks.
-Hosts the primary endpoint GET /api/market/quotes:
-Layer 1: Queries live prices, volume, and OI for all 50 stocks via Kite Connect.
-Layer 2: Automatically falls back to the official NSE India API if the Kite session is inactive.
-Layer 3: Uses the internal simulation engine so the dashboard never renders blank.
-Serves endpoints for options chains (/api/options/chain), expiries (/api/options/expiries), candles (/api/chart/candles), and real-time ticks (/api/chart/tick).
-Registers routers: oi_signal_router, confluence_router, energy_router, market_overview_router, and weighted_setup_router.
-backend/nifty50.csv
-Stores the official constituent mapping of all 50 NIFTY companies.
-Columns: Company Name, Industry (Sector), Symbol, Series, ISIN Code.
-Used by the scanner to categorize stocks into sectors (Financial Services, IT, Automobile, Healthcare, Energy, etc.).
-backend/services/ (Core Engines)
-File	Purpose
-kite_client.py	Wraps the Zerodha KiteConnect SDK. Reads credentials from .env, initializes authentication, and reports connection health.
-option_chain.py	Builds real-time option chains around the ATM strike. Computes total Call/Put OI, strike PCR, Support (S1), Resistance (R1), and AB Confluence Score.
-chart_service.py	Fetches historical and live candles across multiple timeframes (1m, 3m, 5m, 15m, 30m, 1H, 1D, W).
-chart_indicators.py	Computes technical indicators: EMA (9, 21, 50, 200), RSI (14), MACD (12, 26, 9), Bollinger Bands, and ATR.
-oi_signal.py	Computes Call vs. Put Open Interest divergence and tracks institutional buildup/unwinding.
-confluence_service.py	Calculates the proprietary A/B Confluence Score (0–100 scale) combining price action, option chain bias, and volume.
-weighted_setup.py	Evaluates trading viability using 4 non-negotiable criteria (Trend, OI Divergence, VWAP bias, Volatility).
-energy_service.py	Tracks MCX Crude Oil futures and correlates energy price movements with broad indices.
-market_news.py & news_analysis.py	Scrapes RSS feeds from Economic Times, Mint, and BSE announcements; performs sentiment scoring.
-3. Frontend Files Detailed Breakdown
-frontend/src/App.tsx
+Root Level
+run.bat: Windows batch script that simultaneously activates the Python virtual environment, launches the FastAPI backend on port 8000, and starts the React Vite frontend on port 5173.
+run_all.py / run_all.bat: CLI utility that validates the Zerodha Kite session, triggers an interactive browser login if expired, writes the new access token to backend/.env, and fetches the latest option chain into latest_nifty_chain.json.
+latest_nifty_chain.json: Offline fallback dataset containing 101 strikes of NIFTY options, ensuring charts and tables render even when external APIs are disconnected.
+Backend Core (backend/)
+backend/main.py: Central FastAPI application.
+Defines the 3-layer quote resolution engine for /api/market/quotes (Kite API 
+→
+→ NSE India API 
+→
+→ Internal Dynamic Simulation).
+Exposes endpoints for option chains (/api/options/chain), expiry dates (/api/options/expiries), candles (/api/chart/candles), and real-time ticks (/api/chart/tick).
+Registers routers for confluence scoring, crude analytics, and weighted setups.
+backend/nifty50.csv: Contains all 50 official NIFTY constituent symbols, full company names, and industry sectors (Financial Services, IT, Automobile, etc.).
+backend/.env: Stores secrets including KITE_API_KEY, KITE_API_SECRET, KITE_ACCESS_TOKEN, and financial news RSS endpoints.
+backend/requirements.txt: Lists Python dependencies (fastapi, uvicorn, kiteconnect, requests, python-dotenv).
+Backend Services (backend/services/)
+kite_client.py: Manages the active Zerodha KiteConnect instance and checks token validity.
+option_chain.py: Dynamic strike ladder generator. Calculates ATM strike, total Call/Put OI, strike-level PCR, and dynamically identifies Major Support (S1) and Resistance (R1).
+chart_service.py: Candlestick engine supporting multiple intervals (1m to W). Features fallback simulation so charts never fail to render.
+chart_indicators.py: Computes EMA 9, EMA 21, EMA 50, EMA 200, RSI 14, MACD, Bollinger Bands, and ATR.
+confluence_service.py: Calculates the A/B Confluence Score (0–100) combining price trend, OI divergence, and volume confirmation.
+weighted_setup.py: Evaluates trade setups against 4 mandatory criteria to filter out false breakouts in choppy markets.
+live_crude.py & energy_service.py: Tracks MCX Crude Oil futures and analyzes the correlation between energy prices and equities.
+market_news.py & news_analysis.py: Fetches and sentiment-tags live financial news from RSS feeds.
+Frontend Core (frontend/src/)
+App.tsx: Main dashboard page combining all modular panels into a dark-themed UI.
+nifty50.ts: Exports an array of all 50 NIFTY constituent symbols used for frontend querying and validation.
+SectorSummary.tsx: The NIFTY 50 Stock Scanner component. Features live LTP, % Change, Call/Put OI, PCR, Trend, and Signal, complete with sector dropdown filtering and strongest/weakest sorting.
+IndicatorCandleChart.tsx: Candlestick chart built using TradingView's lightweight-charts, rendering real-time ticks and indicators.
+OISignalChart.tsx: Put OI vs. Call OI visual bars across strikes to visualize institutional order flow walls.
+LiveMarketStrip.tsx: Top banner cards displaying NIFTY 50, BANK NIFTY, SENSEX, INDIA VIX, and MCX CRUDE OIL with trend sparklines.
+LiveConfluencePanel.tsx: Renders the A/B confluence meter, bias label (Bullish/Bearish/Neutral), and operational recommendation.
+WeightedSetupPanel.tsx: Displays the 4-condition trade setup checklist.
+KiteLoginButton.tsx: UI button to initiate the Kite authentication flow.
 
-The primary React component that orchestrates state and UI:
 
-Top Navigation & Branding: Displays system status (BACKEND ONLINE / OFFLINE), search bar, and alerts.
-State Management: Controls selected symbol (NIFTY/BANKNIFTY), active expiry, strike range (5–50 strikes), and timeframe (1m to W).
-Live Refresh Polling: Periodically requests updated quotes, option chain ladders, and chart ticks.
-Key Visual Components (frontend/src/)
-Component	Description
-LiveMarketStrip.tsx	Top summary cards showing NIFTY 50 Spot, BANK NIFTY, SENSEX, INDIA VIX, and MCX CRUDE with trend sparklines.
-SectorSummary.tsx	The NIFTY 50 Stock Scanner table. Supports sector filtering, sorting by strongest/weakest, searching by name, and shows LTP, % Change, Call OI, Put OI, PCR, and Signal.
-IndicatorCandleChart.tsx	High-performance interactive candlestick chart powered by TradingView's lightweight-charts. Renders EMA9, EMA21, VWAP, and RSI.
-OISignalChart.tsx	Multi-strike visual representation of Put OI vs. Call OI bars for identifying support and resistance walls.
-AtmOiSummary.tsx	Quick-glance widget highlighting current ATM strike shifts and Put-Call parity.
-LiveConfluencePanel.tsx	Gauges whether market participants are Bullish, Bearish, or Neutral/Rangebound.
-WeightedSetupPanel.tsx	Checks conditions required before entering trades (prevents overtrading in choppy markets).
-LiveCrudeOilPanel.tsx	Monitors energy trends impacting inflation and domestic indices.
-4. Root Launcher Scripts
-run.bat: Double-click script that activates .venv, boots the FastAPI server on http://127.0.0.1:8000, and starts the React Vite dev server on http://localhost:5173.
-run_all.py: Standalone Python utility that verifies your Kite API credentials, opens the login portal if your session has expired, updates the .env token, and exports latest_nifty_chain.json.
-run_kite_fetch.bat: Windows batch shortcut for run_all.py.
+ ┌──────────────────────┐      ┌─────────────────────────┐
+ │ Zerodha Kite Connect │  or  │      NSE India API      │
+ └──────────┬───────────┘      └────────────┬────────────┘
+            │                               │
+            └───────────────┬───────────────┘
+                            ▼
+              ┌───────────────────────────┐
+              │  FastAPI Backend (:8000)  │
+              │  (main.py & services/)    │
+              └─────────────┬─────────────┘
+                            │  JSON REST & Polling
+                            ▼
+              ┌───────────────────────────┐
+              │  React Vite App (:5173)   │
+              │  (App.tsx & Components)   │
+              └───────────────────────────┘
+
+Backend: Periodically polls or streams market data from Kite Connect or NSE India.
+Analysis Engines: Compute Greeks, moving averages, PCR, and confluence scores in Python.
+Frontend: Queries /api/market/quotes, /api/options/chain, and /api/chart/candles to render the real-time trading dashboard.

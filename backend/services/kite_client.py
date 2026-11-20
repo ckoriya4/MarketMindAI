@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 BASE_DIR = Path(__file__).resolve().parent.parent
 ENV_FILE = BASE_DIR / ".env"
 
-# Preserve Render environment variables.
+# Preserve environment variables configured on Render.
 load_dotenv(ENV_FILE, override=False)
 
 
@@ -22,6 +22,7 @@ class KiteClientManager:
 
         self.kite = None
         self.is_connected = False
+        self.profile = None
 
         self._lock = threading.RLock()
 
@@ -33,13 +34,13 @@ class KiteClientManager:
 
     def _load_access_token(self):
 
-        # 1. Render environment variable
-        token = os.getenv("KITE_ACCESS_TOKEN", "").strip()
+        token = os.getenv(
+            "KITE_ACCESS_TOKEN", ""
+        ).strip()
 
         if token:
             return token
 
-        # 2. Optional token file
         token_file = os.getenv(
             "KITE_TOKEN_FILE",
             "/var/data/kite_access_token.json"
@@ -50,7 +51,7 @@ class KiteClientManager:
 
         path = Path(token_file)
 
-        if not path.exists():
+        if not path.is_file():
             return ""
 
         try:
@@ -72,22 +73,39 @@ class KiteClientManager:
                 return ""
 
             except json.JSONDecodeError:
-                # Support plain-text token files.
                 return content
 
         except Exception as exc:
-            print("[KiteClient] Token file error:", exc)
+            print(
+                "[KiteClient] Token file read error:",
+                str(exc)
+            )
+
             return ""
 
     # --------------------------------------------------
-    # INITIALIZE KITE CLIENT
+    # CLEAR CONNECTION
+    # --------------------------------------------------
+
+    def _clear_connection(self):
+
+        self.kite = None
+        self.access_token = ""
+        self.is_connected = False
+        self.profile = None
+
+    # --------------------------------------------------
+    # INITIALIZE CLIENT
     # --------------------------------------------------
 
     def _init_client(self):
 
         with self._lock:
 
-            load_dotenv(ENV_FILE, override=False)
+            load_dotenv(
+                ENV_FILE,
+                override=False
+            )
 
             self.api_key = os.getenv(
                 "KITE_API_KEY", ""
@@ -100,40 +118,54 @@ class KiteClientManager:
             token = self._load_access_token()
 
             if not self.api_key:
-                self.kite = None
-                self.access_token = ""
-                self.is_connected = False
-                print("[KiteClient] API key missing")
+                self._clear_connection()
+
+                print(
+                    "[KiteClient] KITE_API_KEY missing."
+                )
+
                 return False
 
             if not token:
-                self.kite = None
-                self.access_token = ""
-                self.is_connected = False
-                print("[KiteClient] Access token missing")
+                self._clear_connection()
+
+                print(
+                    "[KiteClient] KITE_ACCESS_TOKEN missing."
+                )
+
                 return False
 
             return self.set_access_token(token)
 
     # --------------------------------------------------
-    # UPDATE TOKEN AFTER ZERODHA LOGIN
+    # SET TOKEN AFTER LOGIN
     # --------------------------------------------------
 
     def set_access_token(self, token):
 
         token = str(token or "").strip()
 
-        if not token:
-            return False
-
         with self._lock:
+
+            if not token:
+                self._clear_connection()
+                return False
 
             self.api_key = os.getenv(
                 "KITE_API_KEY", ""
             ).strip()
 
+            self.api_secret = os.getenv(
+                "KITE_API_SECRET", ""
+            ).strip()
+
             if not self.api_key:
-                print("[KiteClient] API key missing")
+                self._clear_connection()
+
+                print(
+                    "[KiteClient] API key missing."
+                )
+
                 return False
 
             try:
@@ -146,20 +178,25 @@ class KiteClientManager:
 
                 client.set_access_token(token)
 
-                # Verify token with Zerodha.
+                # Verify the token with Zerodha.
                 profile = client.profile()
 
-                if not profile or not profile.get("user_id"):
+                if (
+                    not isinstance(profile, dict)
+                    or not profile.get("user_id")
+                ):
                     raise ValueError(
-                        "Invalid Kite profile response"
+                        "Invalid Kite profile response."
                     )
 
-                # Activate only after successful verification.
+                # Activate the client only after verification.
                 self.kite = client
                 self.access_token = token
                 self.is_connected = True
+                self.profile = profile
 
-                # Make token available to other backend code.
+                # Make the new token available to other
+                # services in this running backend process.
                 os.environ["KITE_ACCESS_TOKEN"] = token
 
                 print(
@@ -171,6 +208,8 @@ class KiteClientManager:
 
             except Exception as exc:
 
+                self._clear_connection()
+
                 print(
                     "[KiteClient] Token verification failed:",
                     str(exc)
@@ -179,17 +218,18 @@ class KiteClientManager:
                 return False
 
     # --------------------------------------------------
-    # GET STATUS
+    # GET CONNECTION STATUS
     # --------------------------------------------------
 
     def get_status(self):
 
         with self._lock:
 
-            # Detect a token changed through environment.
             current_token = self._load_access_token()
 
+            # Reinitialize if the token changed externally.
             if current_token != self.access_token:
+
                 self._init_client()
 
             return {
@@ -200,6 +240,11 @@ class KiteClientManager:
                     "Live Zerodha"
                     if self.is_connected
                     else "Dynamic Simulation Engine"
+                ),
+                "user_id": (
+                    self.profile.get("user_id")
+                    if self.profile
+                    else None
                 )
             }
 
@@ -211,6 +256,30 @@ class KiteClientManager:
 
         return self._init_client()
 
+    # --------------------------------------------------
+    # LOGOUT
+    # --------------------------------------------------
 
-# Shared application instance.
+    def logout(self):
+
+        with self._lock:
+
+            self._clear_connection()
+
+            os.environ.pop(
+                "KITE_ACCESS_TOKEN",
+                None
+            )
+
+            print(
+                "[KiteClient] Local Kite session cleared."
+            )
+
+            return True
+
+
+# ------------------------------------------------------
+# SHARED APPLICATION INSTANCE
+# ------------------------------------------------------
+
 kite_manager = KiteClientManager()

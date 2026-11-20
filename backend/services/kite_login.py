@@ -1,15 +1,15 @@
 
 """
-MarketMind AI - Production Zerodha Kite Authentication
+MarketMind AI - Zerodha Kite Authentication
 
-Flow:
-1. Frontend redirects user to /api/auth/kite/login
+Login flow:
+1. Frontend opens /api/auth/kite/login
 2. User authenticates with Zerodha
 3. Zerodha redirects to /api/auth/kite/callback
-4. Backend exchanges request_token for access_token
-5. Shared KiteClientManager is updated
-6. Kite WebSocket is restarted
-7. User is redirected to the Vercel frontend
+4. Backend exchanges request_token
+5. Shared KiteClientManager verifies the access token
+6. Kite WebSocket starts
+7. User returns to the Vercel dashboard
 """
 
 import os
@@ -26,10 +26,12 @@ from dotenv import load_dotenv
 from kiteconnect import KiteConnect
 from kiteconnect.exceptions import TokenException
 
+from .kite_client import kite_manager
 
-# ---------------------------------------------------------
+
+# --------------------------------------------------
 # ENVIRONMENT
-# ---------------------------------------------------------
+# --------------------------------------------------
 
 BASE = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..")
@@ -40,36 +42,31 @@ ENV_FILE = os.path.join(BASE, ".env")
 load_dotenv(ENV_FILE, override=False)
 
 
-# ---------------------------------------------------------
-# EXISTING MARKETMIND SERVICES
-# ---------------------------------------------------------
-
-from .kite_client import kite_manager
-
-
-# ---------------------------------------------------------
+# --------------------------------------------------
 # ROUTER AND STATE
-# ---------------------------------------------------------
+# --------------------------------------------------
 
 router = APIRouter()
 
 lock = threading.RLock()
 
 pending = {}
-cached = {}
 
 COOKIE = "kite_login_state"
 
 LOGIN_TIMEOUT = 600
 
 
-# ---------------------------------------------------------
+# --------------------------------------------------
 # CONFIGURATION
-# ---------------------------------------------------------
+# --------------------------------------------------
 
 def config():
 
-    load_dotenv(ENV_FILE, override=False)
+    load_dotenv(
+        ENV_FILE,
+        override=False
+    )
 
     api_key = os.getenv(
         "KITE_API_KEY", ""
@@ -87,20 +84,14 @@ def config():
 
         raise HTTPException(
             status_code=503,
-            detail=(
-                "KITE_API_KEY and KITE_API_SECRET "
-                "must be configured in Render Environment."
-            )
+            detail="Kite API credentials are missing in Render."
         )
 
     if not frontend_url:
 
         raise HTTPException(
             status_code=503,
-            detail=(
-                "FRONTEND_URL is missing. "
-                "Set it to your deployed Vercel frontend URL."
-            )
+            detail="FRONTEND_URL is missing in Render."
         )
 
     parsed = urlparse(frontend_url)
@@ -117,26 +108,28 @@ def config():
 
         raise HTTPException(
             status_code=503,
-            detail="Invalid FRONTEND_URL configuration."
+            detail="Invalid FRONTEND_URL."
         )
 
     return api_key, api_secret, frontend_url
 
 
-# ---------------------------------------------------------
-# RESPONSE SECURITY
-# ---------------------------------------------------------
+# --------------------------------------------------
+# SECURITY HEADERS
+# --------------------------------------------------
 
 def clean(response):
 
     response.headers["Cache-Control"] = "no-store"
-
     response.headers["Pragma"] = "no-cache"
-
     response.headers["Referrer-Policy"] = "no-referrer"
 
     return response
 
+
+# --------------------------------------------------
+# FRONTEND REDIRECT
+# --------------------------------------------------
 
 def finish(message):
 
@@ -145,7 +138,9 @@ def finish(message):
     destination = (
         frontend_url
         + "/?"
-        + urlencode({"kite_login": message})
+        + urlencode({
+            "kite_login": message
+        })
     )
 
     response = RedirectResponse(
@@ -161,14 +156,20 @@ def finish(message):
     return clean(response)
 
 
+# --------------------------------------------------
+# JSON RESPONSE
+# --------------------------------------------------
+
 def json_response(data):
 
-    return clean(JSONResponse(data))
+    return clean(
+        JSONResponse(data)
+    )
 
 
-# ---------------------------------------------------------
-# PENDING LOGIN CLEANUP
-# ---------------------------------------------------------
+# --------------------------------------------------
+# CLEANUP EXPIRED LOGIN STATES
+# --------------------------------------------------
 
 def cleanup_pending():
 
@@ -181,9 +182,43 @@ def cleanup_pending():
             pending.pop(state, None)
 
 
-# ---------------------------------------------------------
-# KITE LOGIN
-# ---------------------------------------------------------
+# --------------------------------------------------
+# START WEBSOCKET
+# --------------------------------------------------
+
+def start_kite_stream():
+
+    try:
+
+        from .kite_stream import kite_stream
+
+        kite_stream.stop()
+
+        started = kite_stream.start(
+            kite_manager.api_key,
+            kite_manager.access_token
+        )
+
+        print(
+            "[KiteLogin] WebSocket start requested:",
+            started
+        )
+
+        return bool(started)
+
+    except Exception as exc:
+
+        print(
+            "[KiteLogin] WebSocket startup error:",
+            str(exc)
+        )
+
+        return False
+
+
+# --------------------------------------------------
+# LOGIN
+# --------------------------------------------------
 
 @router.get("/api/auth/kite/login")
 def login(request: Request):
@@ -205,7 +240,6 @@ def login(request: Request):
 
         pending[state] = time.monotonic()
 
-    # Official Kite Connect login URL.
     query = urlencode({
         "v": 3,
         "api_key": api_key,
@@ -224,17 +258,12 @@ def login(request: Request):
         status_code=303
     )
 
-    is_production = (
-        os.getenv("ENVIRONMENT", "").lower()
-        == "production"
-    )
-
     response.set_cookie(
         key=COOKIE,
         value=state,
         max_age=LOGIN_TIMEOUT,
         httponly=True,
-        secure=is_production,
+        secure=True,
         samesite="lax",
         path="/api/auth/kite"
     )
@@ -242,20 +271,20 @@ def login(request: Request):
     return clean(response)
 
 
-# ---------------------------------------------------------
-# KITE CALLBACK
-# ---------------------------------------------------------
+# --------------------------------------------------
+# CALLBACK
+# --------------------------------------------------
 
 @router.get("/api/auth/kite/callback")
 def callback(request: Request):
 
-    params = dict(request.query_params)
+    params = dict(
+        request.query_params
+    )
 
-    # Avoid exposing request_token in ordinary access logs
-    # where supported by the ASGI server.
-    request.scope["query_string"] = b""
-
-    state = params.get("state", "")
+    state = params.get(
+        "state", ""
+    )
 
     cookie_state = request.cookies.get(
         COOKIE, ""
@@ -276,7 +305,10 @@ def callback(request: Request):
 
         cleanup_pending()
 
-        created = pending.pop(state, None)
+        created = pending.pop(
+            state,
+            None
+        )
 
     if created is None:
 
@@ -290,10 +322,12 @@ def callback(request: Request):
         "request_token", ""
     )
 
-    status = params.get("status", "")
+    login_status = params.get(
+        "status", ""
+    )
 
     if (
-        status != "success"
+        login_status != "success"
         or not request_token
         or len(request_token) > 512
     ):
@@ -309,7 +343,7 @@ def callback(request: Request):
             timeout=15
         )
 
-        # Exchange one-time request token.
+        # Exchange request token.
         session = kite.generate_session(
             request_token,
             api_secret=api_secret
@@ -319,16 +353,13 @@ def callback(request: Request):
             "access_token", ""
         )
 
-        if (
-            not isinstance(access_token, str)
-            or not access_token.strip()
-        ):
+        if not isinstance(access_token, str) or not access_token.strip():
 
             raise ValueError(
                 "Kite did not return an access token."
             )
 
-        # Verify token and activate shared client.
+        # Verify and activate shared client.
         success = kite_manager.set_access_token(
             access_token
         )
@@ -337,126 +368,112 @@ def callback(request: Request):
 
             return finish("exchange_failed")
 
-        # -------------------------------------------------
-        # RECONNECT KITE WEBSOCKET
-        # -------------------------------------------------
-
-        try:
-
-            from .kite_stream import kite_stream
-
-            try:
-                kite_stream.stop()
-            except Exception:
-                pass
-
-            kite_stream.start(
-                kite_manager.api_key,
-                kite_manager.access_token
-            )
-
-            print(
-                "[KiteLogin] WebSocket restart requested."
-            )
-
-        except Exception as exc:
-
-            # Authentication succeeded even if WebSocket
-            # startup needs separate troubleshooting.
-            print(
-                "[KiteLogin] WebSocket restart warning:",
-                str(exc)
-            )
-
-        # Invalidate cached status.
-        with lock:
-            cached.clear()
+        # Start WebSocket after successful authentication.
+        websocket_started = start_kite_stream()
 
         print(
-            "[KiteLogin] Zerodha authentication successful."
+            "[KiteLogin] Authentication successful."
+        )
+
+        print(
+            "[KiteLogin] WebSocket start requested:",
+            websocket_started
         )
 
         return finish("success")
 
     except TokenException:
 
-        print("[KiteLogin] Kite token exchange rejected.")
+        print(
+            "[KiteLogin] Zerodha rejected the request token."
+        )
 
         return finish("exchange_failed")
 
     except Exception as exc:
 
         print(
-            "[KiteLogin] Authentication error:",
+            "[KiteLogin] Callback error:",
             str(exc)
         )
 
         return finish("exchange_failed")
 
 
-# ---------------------------------------------------------
-# KITE LOGIN STATUS
-# ---------------------------------------------------------
+# --------------------------------------------------
+# STATUS
+# --------------------------------------------------
 
 @router.get("/api/auth/kite/status")
 def status(request: Request):
 
     try:
 
-        api_key, _, _ = config()
+        config()
 
     except HTTPException:
 
         return json_response({
-            "state": "setup_required"
+            "state": "setup_required",
+            "connected": False,
+            "websocket_connected": False
         })
 
-    # Use the shared manager instead of a separate
-    # environment-only token check.
     manager_status = kite_manager.get_status()
 
-    if not manager_status["has_access_token"]:
+    if not manager_status["is_connected"]:
 
         return json_response({
             "state": "login_required",
-            "connected": False
+            "connected": False,
+            "websocket_connected": False
         })
 
-    if manager_status["is_connected"]:
+    try:
 
-        return json_response({
-            "state": "connected",
-            "connected": True
-        })
+        from .kite_stream import kite_stream
+
+        websocket_connected = bool(
+            kite_stream.connected
+        )
+
+    except Exception:
+
+        websocket_connected = False
 
     return json_response({
-        "state": "login_required",
-        "connected": False
+        "state": "connected",
+        "connected": True,
+        "websocket_connected": websocket_connected,
+        "mode": manager_status["mode"],
+        "user_id": manager_status.get("user_id")
     })
 
 
-# ---------------------------------------------------------
-# OPTIONAL LOGOUT STATUS ENDPOINT
-# ---------------------------------------------------------
+# --------------------------------------------------
+# LOGOUT
+# --------------------------------------------------
 
 @router.post("/api/auth/kite/logout")
 def logout():
 
-    with kite_manager._lock:
+    kite_manager.logout()
 
-        kite_manager.kite = None
-        kite_manager.access_token = ""
-        kite_manager.is_connected = False
+    try:
 
-    os.environ.pop(
-        "KITE_ACCESS_TOKEN",
-        None
-    )
+        from .kite_stream import kite_stream
 
-    with lock:
-        cached.clear()
+        kite_stream.stop()
+
+    except Exception as exc:
+
+        print(
+            "[KiteLogin] WebSocket stop warning:",
+            str(exc)
+        )
 
     return json_response({
         "state": "logged_out",
-        "connected": False
+        "connected": False,
+        "websocket_connected": False
     })
