@@ -19,14 +19,25 @@ from .market_session import intraday_session
 IST = timezone(timedelta(hours=5, minutes=30))
 
 INTERVALS = {
-    '1m': 'minute',
-    '3m': '3minute',
-    '5m': '5minute',
-    '15m': '15minute',
-    '30m': '30minute',
-    '1H': '60minute',
-    '1D': 'day',
-    'W': 'day'
+    "1m": "minute",
+    "3m": "3minute",
+    "5m": "5minute",
+    "15m": "15minute",
+    "30m": "30minute",
+    "1H": "60minute",
+    "1D": "day",
+    "W": "day"
+}
+
+# Kite exchange and exact index tradingsymbol mappings.
+INDEX_INSTRUMENTS = {
+    "NIFTY": ("NSE", "NIFTY 50", "NIFTY 50 · NSE spot"),
+    "BANKNIFTY": ("NSE", "NIFTY BANK", "BANK NIFTY · NSE spot"),
+    "FINNIFTY": ("NSE", "NIFTY FIN SERVICE", "FINNIFTY · NSE spot"),
+    "MIDCPNIFTY": ("NSE", "NIFTY MID SELECT", "MIDCPNIFTY · NSE spot"),
+    "NIFTYNXT50": ("NSE", "NIFTY NEXT 50", "NIFTY NEXT 50 · NSE spot"),
+    "SENSEX": ("BSE", "SENSEX", "SENSEX · BSE spot"),
+    "BANKEX": ("BSE", "BANKEX", "BANKEX · BSE spot"),
 }
 
 _cache = {}
@@ -87,7 +98,7 @@ def weekly(candles):
     groups = {}
 
     for c in candles:
-        dt = datetime.fromtimestamp(c['time'], IST)
+        dt = datetime.fromtimestamp(c["time"], IST)
 
         monday = (
             dt - timedelta(days=dt.weekday())
@@ -107,10 +118,10 @@ def weekly(candles):
             w = groups[bucket]
 
             w.update(
-                high=max(w['high'], c['high']),
-                low=min(w['low'], c['low']),
-                close=c['close'],
-                volume=w['volume'] + c['volume']
+                high=max(w["high"], c["high"]),
+                low=min(w["low"], c["low"]),
+                close=c["close"],
+                volume=w["volume"] + c["volume"]
             )
 
     return list(groups.values())
@@ -120,12 +131,12 @@ def normalize_records(records):
     by_time = {}
 
     for r in records:
-        dt = r.get('date')
+        dt = r.get("date")
 
         if not isinstance(dt, datetime):
             raise HTTPException(
                 503,
-                'Kite candle timestamp invalid'
+                "Kite candle timestamp invalid"
             )
 
         if dt.tzinfo is None:
@@ -133,7 +144,7 @@ def normalize_records(records):
 
         values = {
             k: r.get(k)
-            for k in ('open', 'high', 'low', 'close')
+            for k in ("open", "high", "low", "close")
         }
 
         if any(
@@ -145,26 +156,26 @@ def normalize_records(records):
         ):
             raise HTTPException(
                 503,
-                'Kite returned invalid OHLC; no replacement price used'
+                "Kite returned invalid OHLC; no replacement price used"
             )
 
         if (
-            values['high'] < max(
-                values['open'],
-                values['close'],
-                values['low']
+            values["high"] < max(
+                values["open"],
+                values["close"],
+                values["low"]
             )
-            or values['low'] > min(
-                values['open'],
-                values['close']
+            or values["low"] > min(
+                values["open"],
+                values["close"]
             )
         ):
             raise HTTPException(
                 503,
-                'Inconsistent provider OHLC'
+                "Inconsistent provider OHLC"
             )
 
-        volume = r.get('volume', 0)
+        volume = r.get("volume", 0)
 
         if (
             not isinstance(volume, (int, float))
@@ -174,7 +185,7 @@ def normalize_records(records):
         ):
             raise HTTPException(
                 503,
-                'Invalid provider volume'
+                "Invalid provider volume"
             )
 
         by_time[int(dt.timestamp())] = dict(
@@ -190,7 +201,7 @@ def normalize_records(records):
 
 
 def quote_metadata(quote, candles, now, timeframe):
-    raw = quote.get('timestamp')
+    raw = quote.get("timestamp")
     ts = None
 
     if raw is not None:
@@ -202,24 +213,24 @@ def quote_metadata(quote, candles, now, timeframe):
     age = now.timestamp() - ts if ts is not None else None
 
     status = (
-        'fresh'
+        "fresh"
         if age is not None and -5 <= age <= 90
-        else 'unverified'
+        else "unverified"
         if ts is None
-        else 'stale'
+        else "stale"
     )
 
-    last = candles[-1]['time']
+    last = candles[-1]["time"]
 
     step = {
-        '1m': 60,
-        '3m': 180,
-        '5m': 300,
-        '15m': 900,
-        '30m': 1800,
-        '1H': 3600,
-        '1D': 86400,
-        'W': 604800
+        "1m": 60,
+        "3m": 180,
+        "5m": 300,
+        "15m": 900,
+        "30m": 1800,
+        "1H": 3600,
+        "1D": 86400,
+        "W": 604800
     }[timeframe]
 
     candle_recent = (
@@ -235,9 +246,9 @@ def quote_metadata(quote, candles, now, timeframe):
         ),
         quote_status=status,
         status=(
-            'fresh'
-            if status == 'fresh' and candle_recent
-            else 'stale'
+            "fresh"
+            if status == "fresh" and candle_recent
+            else "stale"
         ),
         last_candle_time=last,
         last_candle_closed=(
@@ -247,90 +258,207 @@ def quote_metadata(quote, candles, now, timeframe):
             0,
             int(now.timestamp() - last)
         ),
-        refresh_seconds=5,
-        transport='Kite REST snapshots (5s polling), not WebSocket ticks',
+        refresh_seconds=3,
+        transport="Kite REST snapshots (3-second polling), not WebSocket ticks",
         indicator_source=(
-            'Calculated from actual Kite historical OHLCV; '
-            'not fetched as Kite chart studies'
+            "Calculated from actual Kite historical OHLCV; "
+            "not fetched as Kite chart studies"
         )
     )
 
 
+# ---------------------------------------------------------
+# INSTRUMENT RESOLUTION
+# ---------------------------------------------------------
+
+def resolve_instrument(kite, symbol, now):
+    """Resolve the selected market to a real Kite instrument."""
+
+    if symbol in INDEX_INSTRUMENTS:
+
+        exchange, tradingsymbol, label = INDEX_INSTRUMENTS[symbol]
+
+        with shared.lock:
+            instruments = shared.instruments(
+                kite,
+                now.date()
+            )
+
+        matches = [
+            item
+            for item in instruments
+            if (
+                item.get("exchange") == exchange
+                and item.get("tradingsymbol") == tradingsymbol
+                and item.get("instrument_token")
+            )
+        ]
+
+        if not matches:
+            raise HTTPException(
+                503,
+                f"Kite instrument not found: {exchange}:{tradingsymbol}. "
+                "Check the Kite instrument list and market-data access."
+            )
+
+        item = matches[0]
+
+        return (
+            item["instrument_token"],
+            f"{exchange}:{tradingsymbol}",
+            label,
+            False
+        )
+
+    if symbol == "NIFTY_FUT":
+
+        with shared.lock:
+            instruments = shared.instruments(
+                kite,
+                now.date()
+            )
+
+        futures = sorted(
+            [
+                item
+                for item in instruments
+                if (
+                    item.get("name") == "NIFTY"
+                    and item.get("instrument_type") == "FUT"
+                    and item.get("exchange") == "NFO"
+                    and item.get("instrument_token")
+                    and shared.expiry_date(
+                        item["expiry"]
+                    ) >= now.date()
+                )
+            ],
+            key=lambda item: shared.expiry_date(
+                item["expiry"]
+            )
+        )
+
+        if not futures:
+            raise HTTPException(
+                503,
+                "No listed NIFTY futures contract"
+            )
+
+        item = futures[0]
+
+        return (
+            item["instrument_token"],
+            "NFO:" + item["tradingsymbol"],
+            item["tradingsymbol"] + " · NFO futures",
+            True
+        )
+
+    if symbol == "CRUDE":
+
+        with shared.lock:
+            instruments = shared.instruments(
+                kite,
+                now.date()
+            )
+
+        futures = sorted(
+            [
+                item
+                for item in instruments
+                if (
+                    item.get("name") == "CRUDEOIL"
+                    and item.get("instrument_type") == "FUT"
+                    and item.get("exchange") == "MCX"
+                    and item.get("instrument_token")
+                    and shared.expiry_date(
+                        item["expiry"]
+                    ) >= now.date()
+                )
+            ],
+            key=lambda item: shared.expiry_date(
+                item["expiry"]
+            )
+        )
+
+        if not futures:
+            raise HTTPException(
+                503,
+                "No listed MCX CRUDEOIL futures contract"
+            )
+
+        item = futures[0]
+
+        return (
+            item["instrument_token"],
+            "MCX:" + item["tradingsymbol"],
+            item["tradingsymbol"] + " · MCX futures",
+            True
+        )
+
+    raise HTTPException(
+        422,
+        "Unsupported chart symbol. Supported: "
+        "NIFTY, BANKNIFTY, FINNIFTY, MIDCPNIFTY, "
+        "NIFTYNXT50, SENSEX, BANKEX, CRUDE, NIFTY_FUT"
+    )
+
+
+# ---------------------------------------------------------
+# MAIN CHART DATA
+# ---------------------------------------------------------
+
 def get_chart_data(
-    symbol='NIFTY',
-    timeframe='5m',
+    symbol="NIFTY",
+    timeframe="5m",
     count=60,
     session=False
 ):
+    symbol = symbol.strip().upper()
+
+    supported_symbols = (
+        set(INDEX_INSTRUMENTS.keys())
+        | {"NIFTY_FUT", "CRUDE"}
+    )
+
     if (
-        symbol not in ('NIFTY', 'NIFTY_FUT')
+        symbol not in supported_symbols
         or timeframe not in INTERVALS
     ):
         raise HTTPException(
             422,
-            'Supported symbols NIFTY/NIFTY_FUT and displayed timeframes only'
+            "Unsupported chart symbol or timeframe"
         )
 
     with _lock:
+
         key = (symbol, timeframe)
         cached = _cache.get(key)
 
-        if cached and time.monotonic() - cached[0] < 5:
+        # Refresh chart snapshot every 3 seconds.
+        if (
+            cached
+            and time.monotonic() - cached[0] < 3
+        ):
             full = cached[1]
 
         else:
+
             try:
                 kite = kite_client()
                 now = datetime.now(IST)
 
-                token = 256265
-                quote_key = 'NSE:NIFTY 50'
-                instrument = 'NIFTY 50 · NSE spot'
-
-                if symbol == 'NIFTY_FUT':
-                    with shared.lock:
-                        futures = sorted(
-                            [
-                                r
-                                for r in shared.instruments(
-                                    kite,
-                                    now.date()
-                                )
-                                if (
-                                    r.get('name') == 'NIFTY'
-                                    and r.get('instrument_type') == 'FUT'
-                                    and shared.expiry_date(
-                                        r['expiry']
-                                    ) >= now.date()
-                                )
-                            ],
-                            key=lambda r: shared.expiry_date(
-                                r['expiry']
-                            )
-                        )
-
-                    if not futures:
-                        raise HTTPException(
-                            503,
-                            'No listed NIFTY futures contract'
-                        )
-
-                    token = futures[0]['instrument_token']
-
-                    quote_key = (
-                        'NFO:' + futures[0]['tradingsymbol']
+                token, quote_key, instrument, volume_supported = (
+                    resolve_instrument(
+                        kite,
+                        symbol,
+                        now
                     )
-
-                    instrument = (
-                        futures[0]['tradingsymbol']
-                        + ' · NFO futures'
-                    )
+                )
 
                 days = (
                     1900
-                    if timeframe == 'W'
+                    if timeframe == "W"
                     else 400
-                    if timeframe == '1D'
+                    if timeframe == "1D"
                     else 55
                 )
 
@@ -339,7 +467,7 @@ def get_chart_data(
 
                 full_reload = (
                     previous is None
-                    or time.monotonic() - previous['loaded'] >= 1800
+                    or time.monotonic() - previous["loaded"] >= 1800
                 )
 
                 if full_reload:
@@ -350,28 +478,28 @@ def get_chart_data(
                 else:
                     step = (
                         86400
-                        if timeframe in ('1D', 'W')
+                        if timeframe in ("1D", "W")
                         else {
-                            '1m': 60,
-                            '3m': 180,
-                            '5m': 300,
-                            '15m': 900,
-                            '30m': 1800,
-                            '1H': 3600
+                            "1m": 60,
+                            "3m": 180,
+                            "5m": 300,
+                            "15m": 900,
+                            "30m": 1800,
+                            "1H": 3600
                         }[timeframe]
                     )
 
                     start = datetime.fromtimestamp(
-                        previous['candles'][-1]['time'] - 2 * step,
+                        previous["candles"][-1]["time"] - 2 * step,
                         IST
                     )
 
                     existing = {
-                        c['time']: c
-                        for c in previous['candles']
+                        c["time"]: c
+                        for c in previous["candles"]
                     }
 
-                    loaded = previous['loaded']
+                    loaded = previous["loaded"]
 
                 records = []
 
@@ -380,7 +508,7 @@ def get_chart_data(
                         now,
                         start + timedelta(
                             days=900
-                            if timeframe in ('1D', 'W')
+                            if timeframe in ("1D", "W")
                             else 55
                         )
                     )
@@ -401,11 +529,12 @@ def get_chart_data(
                 if not incoming:
                     raise HTTPException(
                         503,
-                        'No current historical candles returned; keeping chart explicitly stale'
+                        "No current historical candles returned; "
+                        "keeping chart explicitly stale"
                     )
 
                 existing.update({
-                    c['time']: c
+                    c["time"]: c
                     for c in incoming
                 })
 
@@ -418,7 +547,7 @@ def get_chart_data(
                 if not raw:
                     raise HTTPException(
                         503,
-                        'No valid actual candles'
+                        "No valid actual candles"
                     )
 
                 _history_cache[history_key] = dict(
@@ -428,16 +557,15 @@ def get_chart_data(
 
                 candles = (
                     weekly(raw)
-                    if timeframe == 'W'
+                    if timeframe == "W"
                     else raw
                 )
 
-                quote = kite.quote(
-                    [quote_key]
-                ).get(quote_key, {})
+                quote_response = kite.quote([quote_key])
+                quote = quote_response.get(quote_key, {})
 
-                ltp = quote.get('last_price')
-                close = quote.get('ohlc', {}).get('close')
+                ltp = quote.get("last_price")
+                close = (quote.get("ohlc") or {}).get("close")
 
                 if (
                     not isinstance(ltp, (int, float))
@@ -447,7 +575,8 @@ def get_chart_data(
                 ):
                     raise HTTPException(
                         503,
-                        'Actual Kite LTP unavailable; no candle-close substitution'
+                        "Actual Kite LTP unavailable; "
+                        "no candle-close substitution"
                     )
 
                 valid_close = (
@@ -466,9 +595,9 @@ def get_chart_data(
                 full = dict(
                     symbol=symbol,
                     timeframe=timeframe,
-                    source='kite',
+                    source="kite",
                     data_mode=(
-                        'Actual Kite historical OHLCV + separate Kite LTP'
+                        "Actual Kite historical OHLCV + separate Kite LTP"
                     ),
                     instrument=instrument,
                     instrument_token=token,
@@ -490,10 +619,9 @@ def get_chart_data(
                     fetched_at=datetime.now(IST).isoformat()
                 )
 
-                # Calculate all indicators, including MA8 and WMA8.
                 full = enrich(
                     full,
-                    volume_supported=symbol == 'NIFTY_FUT'
+                    volume_supported=volume_supported
                 )
 
                 full.update(
@@ -505,23 +633,22 @@ def get_chart_data(
                     )
                 )
 
-                # Latest candle and latest indicator values.
-                full['latest_tick'] = dict(
+                full["latest_tick"] = dict(
                     candles[-1],
-                    ema9=full['indicators']['ema9'],
-                    ema21=full['indicators']['ema21'],
-                    ma8=full['indicators']['ma8'],
-                    wma8=full['indicators']['wma8'],
-                    ma_wma_signal=full['indicators']['ma_wma_signal']
+                    ema9=full["indicators"]["ema9"],
+                    ema21=full["indicators"]["ema21"],
+                    ma8=full["indicators"]["ma8"],
+                    wma8=full["indicators"]["wma8"],
+                    ma_wma_signal=full["indicators"]["ma_wma_signal"]
                 )
 
-                full['warmup_bars'] = len(candles)
+                full["warmup_bars"] = len(candles)
 
-                full['comparison_note'] = (
-                    'Compare the identical spot/futures contract, '
-                    'timeframe, regular candles and indicator settings. '
-                    'Seeding/warm-up, forming candles and data delivery '
-                    'can differ from Kite UI.'
+                full["comparison_note"] = (
+                    "Compare the identical spot/futures contract, "
+                    "timeframe, regular candles and indicator settings. "
+                    "Seeding/warm-up, forming candles and data delivery "
+                    "can differ from Kite UI."
                 )
 
                 _cache[key] = (
@@ -532,16 +659,24 @@ def get_chart_data(
             except TokenException:
                 raise HTTPException(
                     401,
-                    'Kite session expired. Update token and restart.'
+                    "Kite session expired. Update token and restart."
                 ) from None
 
             except HTTPException:
                 raise
 
-            except Exception:
+            except Exception as exc:
+                print(
+                    "[ChartService] Chart fetch error:",
+                    symbol,
+                    str(exc)
+                )
+
                 raise HTTPException(
                     503,
-                    'Actual Kite chart data unavailable; verify token, historical-data access and network.'
+                    "Actual Kite chart data unavailable; verify "
+                    "instrument mapping, token, historical-data "
+                    "access and network."
                 ) from None
 
         return intraday_session(
