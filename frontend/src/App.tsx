@@ -648,6 +648,7 @@ export default function App() {
       <LiveMarketStrip
         symbol={selectedMarket}
         expiry={selectedExpiry || chainData?.selected_expiry || ""}
+        onMarketChange={handleMarketChange}
       />
 
       <main className="dashboard">

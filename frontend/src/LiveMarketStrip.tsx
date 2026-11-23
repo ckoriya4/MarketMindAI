@@ -30,15 +30,18 @@ interface MarketOverview {
   };
 }
 
-const EMPTY = [
-  ["NIFTY", "NIFTY 50"],
-  ["BANKNIFTY", "BANK NIFTY"],
-  ["SENSEX", "SENSEX"],
-  ["VIX", "INDIA VIX"],
-  ["CRUDE", "CRUDE OIL"],
-].map(([id, name]) => ({
-  id,
-  name,
+const MARKET_LIST = [
+  { id: "NIFTY", name: "NIFTY 50" },
+  { id: "BANKNIFTY", name: "BANK NIFTY" },
+  { id: "FINNIFTY", name: "FINNIFTY" },
+  { id: "MIDCPNIFTY", name: "MIDCPNIFTY" },
+  { id: "NIFTYNXT50", name: "NIFTY NEXT 50" },
+  { id: "SENSEX", name: "SENSEX" },
+  { id: "BANKEX", name: "BANKEX" },
+];
+
+const EMPTY = MARKET_LIST.map((market) => ({
+  ...market,
   price: null,
   status: "loading",
   history: [],
@@ -58,14 +61,19 @@ const formatted = (card: MarketCardData) =>
       }
     )}`;
 
+const normalizeSymbol = (value?: string) =>
+  (value || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+
 interface LiveMarketStripProps {
   symbol?: string;
   expiry?: string;
+  onMarketChange?: (symbol: string) => void;
 }
 
 export default function LiveMarketStrip({
   symbol = "NIFTY",
   expiry = "",
+  onMarketChange,
 }: LiveMarketStripProps) {
   const [data, setData] = useState<MarketOverview | null>(null);
   const [error, setError] = useState("");
@@ -148,13 +156,33 @@ export default function LiveMarketStrip({
     !!error ||
     (!!data && (!Number.isFinite(received) || now - received > 45000));
 
-  const cards = data?.cards || EMPTY;
+  // Show exactly the seven markets available in the Option Chain buttons.
+  // Match API quotes by either card ID or instrument symbol.
+  const cards = MARKET_LIST.map((market) => {
+    const apiCard = data?.cards.find(
+      (card) =>
+        normalizeSymbol(card.id) === normalizeSymbol(market.id) ||
+        normalizeSymbol(card.symbol) === normalizeSymbol(market.id)
+    );
+
+    return (
+      apiCard || {
+        ...market,
+        price: null,
+        status: data ? "unavailable" : "loading",
+        history: [],
+        error: data
+          ? "This market quote is not available from the backend yet."
+          : undefined,
+      }
+    ) as MarketCardData;
+  });
 
   // Find the selected market's quote for the ATM spot-change display.
   const selectedMarketCard = cards.find(
     (card) =>
-      card.id.toUpperCase() === symbol.toUpperCase() ||
-      card.symbol?.toUpperCase() === symbol.toUpperCase()
+      normalizeSymbol(card.id) === normalizeSymbol(symbol) ||
+      normalizeSymbol(card.symbol) === normalizeSymbol(symbol)
   );
 
   const selectedSpotChange =
@@ -196,8 +224,28 @@ export default function LiveMarketStrip({
             : "exchange timestamp not supplied; received snapshot shown"
           }`;
 
+        const isSelected =
+          normalizeSymbol(symbol) === normalizeSymbol(card.id);
+
         return (
-          <div className="market-card" key={card.id} title={title}>
+          <div
+            className="market-card"
+            key={card.id}
+            title={title}
+            role={onMarketChange ? "button" : undefined}
+            tabIndex={onMarketChange ? 0 : undefined}
+            aria-pressed={onMarketChange ? isSelected : undefined}
+            onClick={() => onMarketChange?.(card.id)}
+            onKeyDown={(e) => {
+              if (
+                onMarketChange &&
+                (e.key === "Enter" || e.key === " ")
+              ) {
+                e.preventDefault();
+                onMarketChange(card.id);
+              }
+            }}
+          >
             <div className="market-card-content">
               <div className="muted tiny">
                 {card.name}
@@ -231,7 +279,7 @@ export default function LiveMarketStrip({
         );
       })}
 
-      {/* ATM card follows the selected Option Chain market */}
+      {/* ATM card remains after all seven market cards */}
       <AtmOiSummary
         symbol={symbol}
         expiry={expiry}
