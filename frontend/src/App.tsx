@@ -554,10 +554,10 @@ export default function App() {
           <div className="oi-signal-lines" role="status" aria-live="polite">
             <div
               className={`oi-single-line ${oiSignal.oiType === "CALL BUY"
-                  ? "call-alert"
-                  : oiSignal.oiType === "PUT BUY"
-                    ? "put-alert"
-                    : "hold-alert"
+                ? "call-alert"
+                : oiSignal.oiType === "PUT BUY"
+                  ? "put-alert"
+                  : "hold-alert"
                 }`}
             >
               <Activity size={14} />
@@ -592,12 +592,12 @@ export default function App() {
 
             <div
               className={`oi-single-line ${oiSignal.maType === "CALL BUY"
-                  ? "call-alert"
-                  : oiSignal.maType === "PUT BUY"
-                    ? "put-alert"
-                    : oiSignal.maType === "EQUAL"
-                      ? "equal-alert"
-                      : "hold-alert"
+                ? "call-alert"
+                : oiSignal.maType === "PUT BUY"
+                  ? "put-alert"
+                  : oiSignal.maType === "EQUAL"
+                    ? "equal-alert"
+                    : "hold-alert"
                 }`}
             >
               <Activity size={14} />
@@ -646,6 +646,7 @@ export default function App() {
       </div>
 
       <LiveMarketStrip
+        symbol={selectedMarket}
         expiry={selectedExpiry || chainData?.selected_expiry || ""}
       />
 
@@ -949,12 +950,12 @@ export default function App() {
                       return (
                         <tr key={s.strike} className={rowClass}>
                           <td className={`oi-cell ${s.call_oi_chg == null
-                              ? "muted"
-                              : s.call_oi_chg > 0
-                                ? "positive"
-                                : s.call_oi_chg < 0
-                                  ? "negative"
-                                  : "muted"
+                            ? "muted"
+                            : s.call_oi_chg > 0
+                              ? "positive"
+                              : s.call_oi_chg < 0
+                                ? "negative"
+                                : "muted"
                             }`}>
                             <span>
                               {s.call_oi_formatted}{" "}
@@ -994,12 +995,12 @@ export default function App() {
                           <td>{s.put_ltp?.toFixed(2) ?? "—"}</td>
 
                           <td className={`oi-cell ${s.put_oi_chg == null
-                              ? "muted"
-                              : s.put_oi_chg > 0
-                                ? "positive"
-                                : s.put_oi_chg < 0
-                                  ? "negative"
-                                  : "muted"
+                            ? "muted"
+                            : s.put_oi_chg > 0
+                              ? "positive"
+                              : s.put_oi_chg < 0
+                                ? "negative"
+                                : "muted"
                             }`}>
                             <span>
                               {s.put_oi_formatted}{" "}

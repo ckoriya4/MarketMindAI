@@ -18,6 +18,7 @@ interface Row {
 }
 
 interface Chain {
+    symbol?: string;
     atm_strike: number;
     selected_expiry: string;
     status: string;
@@ -39,9 +40,11 @@ const quantity = (n: number) =>
         : `${(n / 1e5).toFixed(2)}L`;
 
 export default function AtmOiSummary({
+    symbol = "NIFTY",
     expiry = "",
     spotChange,
 }: {
+    symbol?: string;
     expiry?: string;
     spotChange?: number | null;
 }) {
@@ -49,23 +52,27 @@ export default function AtmOiSummary({
     const [error, setError] = useState("");
     const [now, setNow] = useState(Date.now());
 
+    // Update stale-data timer.
     useEffect(() => {
         const id = setInterval(() => setNow(Date.now()), 1000);
         return () => clearInterval(id);
     }, []);
 
+    // Fetch ATM option-chain values for the selected market.
     useEffect(() => {
         let active = true;
         let timer: ReturnType<typeof setTimeout> | undefined;
         let controller: AbortController | undefined;
 
         setData(null);
+        setError("");
 
         const load = async () => {
-            controller = new AbortController();
+            const requestController = new AbortController();
+            controller = requestController;
 
             const timeout = setTimeout(() => {
-                controller?.abort();
+                requestController.abort();
             }, 25000);
 
             try {
@@ -74,14 +81,19 @@ export default function AtmOiSummary({
                     window.location.origin
                 );
 
+                // Selected market from the Option Chain buttons.
+                url.searchParams.set("symbol", symbol);
+
+                // Fetch ATM and nearby strikes.
                 url.searchParams.set("num_strikes", "3");
 
+                // Keep the selected expiry.
                 if (expiry) {
                     url.searchParams.set("expiry", expiry);
                 }
 
-                const res = await fetch(url, {
-                    signal: controller.signal,
+                const res = await fetch(url.toString(), {
+                    signal: requestController.signal,
                 });
 
                 const body = await res.json();
@@ -94,15 +106,39 @@ export default function AtmOiSummary({
                     );
                 }
 
-                if (active) {
+                if (
+                    !Array.isArray(body.strikes) ||
+                    typeof body.atm_strike !== "number"
+                ) {
+                    throw new Error("Invalid option-chain response");
+                }
+
+                // Avoid displaying data from a previous market.
+                if (
+                    active &&
+                    (!body.symbol ||
+                        body.symbol.toUpperCase() === symbol.toUpperCase())
+                ) {
                     setData(body);
                     setError("");
+                } else if (
+                    active &&
+                    body.symbol &&
+                    body.symbol.toUpperCase() !== symbol.toUpperCase()
+                ) {
+                    throw new Error(
+                        `Backend returned ${body.symbol} instead of ${symbol}`
+                    );
                 }
             } catch (e) {
                 if (active) {
                     setData(null);
                     setError(
-                        e instanceof Error ? e.message : "OI unavailable"
+                        e instanceof Error
+                            ? e.name === "AbortError"
+                                ? "Option-chain request timed out"
+                                : e.message
+                            : "OI unavailable"
                     );
                 }
             } finally {
@@ -121,14 +157,17 @@ export default function AtmOiSummary({
             clearTimeout(timer);
             controller?.abort();
         };
-    }, [expiry]);
+    }, [symbol, expiry]);
 
+    // Find the ATM strike for the selected market.
     const row = data?.strikes.find((r) => r.is_atm);
 
     const stale =
         !!data &&
-        (data.status !== "fresh" ||
-            now / 1000 - data.spot_quote_at > 90);
+        (
+            data.status !== "fresh" ||
+            now / 1000 - data.spot_quote_at > 90
+        );
 
     const sides = [
         {
@@ -156,7 +195,7 @@ export default function AtmOiSummary({
             className="market-card atm-oi-card"
             title={
                 error ||
-                `ATM OI · ${data?.selected_expiry || expiry} · Previous-session OI baseline`
+                `${symbol} ATM OI · ${data?.selected_expiry || expiry} · Previous-session OI baseline`
             }
             style={{
                 display: "flex",

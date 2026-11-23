@@ -58,11 +58,15 @@ const formatted = (card: MarketCardData) =>
       }
     )}`;
 
-export default function LiveMarketStrip({
-  expiry = "",
-}: {
+interface LiveMarketStripProps {
+  symbol?: string;
   expiry?: string;
-}) {
+}
+
+export default function LiveMarketStrip({
+  symbol = "NIFTY",
+  expiry = "",
+}: LiveMarketStripProps) {
   const [data, setData] = useState<MarketOverview | null>(null);
   const [error, setError] = useState("");
   const [now, setNow] = useState(Date.now());
@@ -75,6 +79,7 @@ export default function LiveMarketStrip({
     const load = async () => {
       const current = new AbortController();
       controller = current;
+
       const timeout = setTimeout(() => current.abort(), 60000);
 
       try {
@@ -144,7 +149,17 @@ export default function LiveMarketStrip({
     (!!data && (!Number.isFinite(received) || now - received > 45000));
 
   const cards = data?.cards || EMPTY;
-  const atmChange = data?.atm?.spot_change_pct;
+
+  // Find the selected market's quote for the ATM spot-change display.
+  const selectedMarketCard = cards.find(
+    (card) =>
+      card.id.toUpperCase() === symbol.toUpperCase() ||
+      card.symbol?.toUpperCase() === symbol.toUpperCase()
+  );
+
+  const selectedSpotChange =
+    selectedMarketCard?.change_pct ??
+    (symbol === "NIFTY" ? data?.atm?.spot_change_pct : null);
 
   return (
     <section className="market-strip" aria-label="Live market overview">
@@ -216,7 +231,12 @@ export default function LiveMarketStrip({
         );
       })}
 
-      <AtmOiSummary expiry={expiry} spotChange={atmChange} />
+      {/* ATM card follows the selected Option Chain market */}
+      <AtmOiSummary
+        symbol={symbol}
+        expiry={expiry}
+        spotChange={selectedSpotChange}
+      />
     </section>
   );
 }
