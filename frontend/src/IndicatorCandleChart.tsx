@@ -172,7 +172,7 @@ export default function IndicatorCandleChart({
 
   // Update quote freshness display every second.
   useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()));
+    const id = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(id);
   }, []);
 
