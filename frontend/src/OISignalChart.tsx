@@ -25,6 +25,7 @@ interface OIData {
   absolute_missing_points?: number;
   absolute_reference?: string;
   absolute_note?: string;
+  symbol?: string;
   session: MarketSession;
   observations: number;
   source: string;
@@ -110,9 +111,11 @@ const number = (n: number) => n.toLocaleString("en-IN");
 // numStrikes remains accepted for existing App.tsx.
 // Wide table range does not control this near-ATM graph.
 export default function OISignalChart({
+  symbol = "NIFTY",
   expiry,
   onOiUpdate,
 }: {
+  symbol?: string;
   expiry: string;
   numStrikes: number;
   onOiUpdate?: (snapshot: OILiveSnapshot | null) => void;
@@ -236,7 +239,7 @@ export default function OISignalChart({
     };
   }, []);
 
-  // Fetch live OI data every 3 seconds.
+  // Fetch selected-market live OI data every 3 seconds.
   useEffect(() => {
     let active = true;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -246,6 +249,7 @@ export default function OISignalChart({
     setError("");
     setHover(null);
     setCrosses([]);
+    setAxisButtons([]);
 
     rendered.current = "";
     fitted.current = "";
@@ -268,7 +272,7 @@ export default function OISignalChart({
 
       try {
         const q = new URLSearchParams({
-          symbol: "NIFTY",
+          symbol: symbol.toUpperCase(),
           side_strikes: "3",
           itm_strikes: "0"
         });
@@ -301,6 +305,16 @@ export default function OISignalChart({
           );
         }
 
+        // Prevent displaying another market's response.
+        if (
+          result.symbol &&
+          String(result.symbol).toUpperCase() !== symbol.toUpperCase()
+        ) {
+          throw new Error(
+            `Received ${result.symbol} data while ${symbol} is selected.`
+          );
+        }
+
         if (active) {
           setData(result);
           setError("");
@@ -329,7 +343,7 @@ export default function OISignalChart({
       clearTimeout(timer);
       controller?.abort();
     };
-  }, [expiry]);
+  }, [symbol, expiry]);
 
   // Update current time every second.
   useEffect(() => {
@@ -373,7 +387,7 @@ export default function OISignalChart({
 
     if (!data || !c) return;
 
-    const key = `${data.scope}:${mode}`;
+    const key = `${symbol}:${data.scope}:${mode}`;
 
     if (rendered.current !== key) {
       for (const pair of pairs.current.values()) {
@@ -573,7 +587,7 @@ export default function OISignalChart({
     }
 
     setHover(null);
-  }, [data, mode]);
+  }, [data, mode, symbol]);
 
   // The API continues polling every 3 seconds. This control changes the
   // visible chart window without changing the backend sampling frequency.
@@ -947,7 +961,7 @@ export default function OISignalChart({
         </div>
 
         <div className="oi-spot">
-          <small>NIFTY spot</small>
+          <small>{symbol} spot</small>
           <strong>
             {data?.spot != null ? number(data.spot) : "—"}
           </strong>

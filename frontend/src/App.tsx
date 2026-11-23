@@ -764,6 +764,7 @@ export default function App() {
         {/* LIVE CHART */}
         <section className="panel chart-panel">
           <OISignalChart
+            symbol={selectedMarket}
             expiry={selectedExpiry || chainData?.selected_expiry || ""}
             numStrikes={strikeRange}
             onOiUpdate={handleOiUpdate}
@@ -823,6 +824,7 @@ export default function App() {
           </div>
 
           <IndicatorCandleChart
+            symbol={selectedMarket}
             timeframe={timeframe}
             onIndicatorsUpdate={setChartIndicators}
             onStatusUpdate={setCandleStatus}

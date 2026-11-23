@@ -106,10 +106,12 @@ const normalizeTimeframe = (value: string) => {
 };
 
 export default function IndicatorCandleChart({
+  symbol = "NIFTY",
   timeframe,
   onIndicatorsUpdate,
   onStatusUpdate
 }: {
+  symbol?: string;
   timeframe: string;
   onIndicatorsUpdate: (ind: ChartStats | null) => void;
   onStatusUpdate: (message: string) => void;
@@ -119,7 +121,15 @@ export default function IndicatorCandleChart({
   const range = useRef<LogicalRange | null>(null);
   const chartKey = useRef("");
 
+  // This selector remains unchanged.
+  // NIFTY_FUT is retained as the optional NIFTY futures selection.
   const [instrument, setInstrument] = useState("NIFTY");
+
+  // Use the selected Option Chain market for the spot chart.
+  const effectiveInstrument =
+    instrument === "NIFTY_FUT" && symbol.toUpperCase() === "NIFTY"
+      ? "NIFTY_FUT"
+      : symbol.toUpperCase();
 
   const [selectedTimeframe, setSelectedTimeframe] = useState(
     normalizeTimeframe(timeframe || "1m")
@@ -166,7 +176,7 @@ export default function IndicatorCandleChart({
   useEffect(() => {
     if (!host.current || !scrollHost.current) return;
 
-    const key = `${instrument}:${selectedTimeframe}`;
+    const key = `${effectiveInstrument}:${selectedTimeframe}`;
 
     if (chartKey.current !== key) {
       range.current = null;
@@ -327,7 +337,7 @@ export default function IndicatorCandleChart({
       addLine("atr14", pane++);
     }
 
-    // Volume pane: available for both NIFTY and NIFTY_FUT.
+    // Volume pane.
     const volume = enabled.includes("Volume")
       ? chart.addSeries(
         HistogramSeries,
@@ -358,6 +368,7 @@ export default function IndicatorCandleChart({
 
     setStats(null);
     setFeed(null);
+    setNote("");
     onIndicatorsUpdate(null);
 
     onStatusUpdate("Loading Kite candles and indicators…");
@@ -374,7 +385,7 @@ export default function IndicatorCandleChart({
 
       try {
         const params = new URLSearchParams({
-          symbol: instrument,
+          symbol: effectiveInstrument,
           timeframe: selectedTimeframe,
           count: "1000",
           session: "true"
@@ -400,6 +411,17 @@ export default function IndicatorCandleChart({
           !data.candles?.length
         ) {
           throw new Error("Actual Kite candles required");
+        }
+
+        // Do not display another market's response.
+        if (
+          data.instrument &&
+          String(data.instrument).toUpperCase() !==
+          effectiveInstrument.toUpperCase()
+        ) {
+          throw new Error(
+            `Received ${data.instrument} data while ${effectiveInstrument} is selected.`
+          );
         }
 
         if (!active) return;
@@ -579,7 +601,7 @@ export default function IndicatorCandleChart({
     };
   }, [
     selectedTimeframe,
-    instrument,
+    effectiveInstrument,
     enabled,
     onIndicatorsUpdate,
     onStatusUpdate
@@ -599,7 +621,7 @@ export default function IndicatorCandleChart({
     <>
       <div className="candle-indicator-controls">
 
-        {/* Instrument selector */}
+        {/* Instrument selector - existing design preserved */}
         <select
           aria-label="Chart instrument"
           value={instrument}
