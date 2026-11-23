@@ -11,11 +11,6 @@ interface SignalChain {
     strikes: StrikeItem[];
 }
 
-interface StockRow {
-    symbol: string;
-    change: number | null;
-}
-
 interface Props {
     stats: ChartStats | null;
     chain: SignalChain | null;
@@ -68,14 +63,23 @@ export default function CrossoverSignalPanel({
                     row.change !== null
             );
 
-        const advances = validChanges.filter(row => row.change > 0).length;
-        const declines = validChanges.filter(row => row.change < 0).length;
+        const advances = validChanges.filter(
+            row => row.change > 0
+        ).length;
 
+        const declines = validChanges.filter(
+            row => row.change < 0
+        ).length;
+
+        // Top-weighted stocks
         const leaders = ["HDFCBANK", "RELIANCE", "ICICIBANK"];
 
         const leaderRows = leaders.map(symbol =>
             validChanges.find(row =>
-                row.symbol.toUpperCase().replace(/[^A-Z]/g, "").includes(symbol)
+                row.symbol
+                    .toUpperCase()
+                    .replace(/[^A-Z]/g, "")
+                    .includes(symbol)
             )
         );
 
@@ -86,6 +90,7 @@ export default function CrossoverSignalPanel({
                     : "FAIL"
                 : "WAITING";
 
+        // Advance / Decline
         const breadthStatus: FilterStatus =
             validChanges.length < 35
                 ? "WAITING"
@@ -93,9 +98,11 @@ export default function CrossoverSignalPanel({
                     ? "PASS"
                     : "FAIL";
 
+        // MFI and PVT require indicator data not currently supplied.
         const mfi: FilterStatus = "WAITING";
         const pvt: FilterStatus = "WAITING";
 
+        // VWAP
         const vwapStatus: FilterStatus =
             typeof stats?.ltp === "number" &&
                 typeof stats?.vwap === "number" &&
@@ -105,17 +112,18 @@ export default function CrossoverSignalPanel({
                     : "FAIL"
                 : "WAITING";
 
-        // A separate 15-minute data feed is required for this filter.
+        // A separate 15-minute data feed is required.
         const trend15: FilterStatus = "WAITING";
 
         const filters: Filter[] = [
             {
                 name: "Top-weighted stocks",
-                detail: leaderStatus === "WAITING"
-                    ? "Waiting for HDFC Bank, Reliance and ICICI Bank quotes"
-                    : leaderStatus === "PASS"
-                        ? "HDFC Bank, Reliance and ICICI Bank are positive"
-                        : "One or more of the three leading stocks are negative",
+                detail:
+                    leaderStatus === "WAITING"
+                        ? "Waiting for HDFC Bank, Reliance and ICICI Bank quotes"
+                        : leaderStatus === "PASS"
+                            ? "HDFC Bank, Reliance and ICICI Bank are positive"
+                            : "One or more of the three leading stocks are negative",
                 status: leaderStatus
             },
             {
@@ -148,9 +156,15 @@ export default function CrossoverSignalPanel({
             }
         ];
 
-        const passed = filters.filter(f => f.status === "PASS").length;
-        const waiting = filters.filter(f => f.status === "WAITING").length;
+        const passed = filters.filter(
+            filter => filter.status === "PASS"
+        ).length;
 
+        const waiting = filters.filter(
+            filter => filter.status === "WAITING"
+        ).length;
+
+        // WMA 8 / MA 8 direction
         const ma = stats?.ma8;
         const wma = stats?.wma8;
 
@@ -163,10 +177,11 @@ export default function CrossoverSignalPanel({
                         : "WAIT"
                 : "WAIT";
 
-        // OI is displayed as context, not counted in the six-filter score.
+        // OI changes are displayed as market context.
         const callOiChange = chain?.strikes.reduce(
             (sum, strike) =>
-                sum + (typeof strike.call_oi_chg === "number"
+                sum +
+                (typeof strike.call_oi_chg === "number"
                     ? strike.call_oi_chg
                     : 0),
             0
@@ -174,7 +189,8 @@ export default function CrossoverSignalPanel({
 
         const putOiChange = chain?.strikes.reduce(
             (sum, strike) =>
-                sum + (typeof strike.put_oi_chg === "number"
+                sum +
+                (typeof strike.put_oi_chg === "number"
                     ? strike.put_oi_chg
                     : 0),
             0
@@ -213,10 +229,9 @@ export default function CrossoverSignalPanel({
         result.passed >= 3 &&
         result.direction !== "WAIT";
 
-    const signal =
-        signalReady
-            ? result.direction
-            : "NO TRADE";
+    const signal = signalReady
+        ? result.direction
+        : "NO TRADE";
 
     const signalColor =
         signal === "CALL"
@@ -242,17 +257,21 @@ export default function CrossoverSignalPanel({
                     }}
                 >
                     <small>TRADE SIGNAL</small>
+
                     <strong style={{ color: signalColor }}>
                         {signal}
                     </strong>
+
                     <span>{strength}</span>
                 </div>
 
                 <div className="crossover-score">
                     <small>FILTER SCORE</small>
+
                     <strong>
                         {result.passed} / 6
                     </strong>
+
                     <span>
                         {result.waiting} filters waiting
                     </span>
@@ -261,13 +280,17 @@ export default function CrossoverSignalPanel({
 
             <div className="crossover-filter-list">
                 {result.filters.map((filter, index) => (
-                    <div className="crossover-filter-row" key={filter.name}>
+                    <div
+                        className="crossover-filter-row"
+                        key={filter.name}
+                    >
                         <span className="crossover-filter-number">
                             {index + 1}
                         </span>
 
                         <div className="crossover-filter-info">
                             <strong>{filter.name}</strong>
+
                             <small>{filter.detail}</small>
                         </div>
 
@@ -283,6 +306,7 @@ export default function CrossoverSignalPanel({
             <div className="crossover-market-context">
                 <div>
                     <span>ADVANCES</span>
+
                     <strong className="positive">
                         {result.advances}
                     </strong>
@@ -290,6 +314,7 @@ export default function CrossoverSignalPanel({
 
                 <div>
                     <span>DECLINES</span>
+
                     <strong className="negative">
                         {result.declines}
                     </strong>
@@ -297,18 +322,20 @@ export default function CrossoverSignalPanel({
 
                 <div>
                     <span>CALL OI CHANGE</span>
+
                     <strong>
                         {result.oiAvailable
-                            ? result.callOiChange.toLocaleString("en-IN")
+                            ? (result.callOiChange ?? 0).toLocaleString("en-IN")
                             : "—"}
                     </strong>
                 </div>
 
                 <div>
                     <span>PUT OI CHANGE</span>
+
                     <strong>
                         {result.oiAvailable
-                            ? result.putOiChange.toLocaleString("en-IN")
+                            ? (result.putOiChange ?? 0).toLocaleString("en-IN")
                             : "—"}
                     </strong>
                 </div>
