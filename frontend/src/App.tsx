@@ -25,6 +25,7 @@ import IndicatorCandleChart, {
   type ChartStats
 } from "./IndicatorCandleChart";
 import { apiUrl } from "./config/api";
+import CrossoverSignalPanel from "./CrossoverSignalPanel";
 
 const navItems = [
   "Dashboard",
@@ -766,6 +767,13 @@ export default function App() {
             metadata={stockMetadata}
             fetchedAt={stockSnapshotAt}
             error={stockQuoteError}
+          />
+
+          <CrossoverSignalPanel
+            stats={chartIndicators}
+            chain={chainData}
+            stocks={stocks}
+            stockMetadata={stockMetadata}
           />
         </section>
 
