@@ -86,12 +86,12 @@
     border-radius: inherit;
 }
 
-.sector-summary-note {
+/* .sector-summary-note {
     color: #7f98af;
     font-size: 8px;
     line-height: 1.5;
     margin-top: 7px;
-}
+} */
 
 .sector-summary-scroll::-webkit-scrollbar {
     width: 8px;
