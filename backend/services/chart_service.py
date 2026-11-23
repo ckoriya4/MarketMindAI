@@ -31,13 +31,13 @@ INTERVALS = {
 
 # Kite exchange and exact index tradingsymbol mappings.
 INDEX_INSTRUMENTS = {
-    "NIFTY": ("NSE", "NIFTY 50", "NIFTY 50 · NSE spot"),
-    "BANKNIFTY": ("NSE", "NIFTY BANK", "BANK NIFTY · NSE spot"),
-    "FINNIFTY": ("NSE", "NIFTY FIN SERVICE", "FINNIFTY · NSE spot"),
-    "MIDCPNIFTY": ("NSE", "NIFTY MID SELECT", "MIDCPNIFTY · NSE spot"),
-    "NIFTYNXT50": ("NSE", "NIFTY NEXT 50", "NIFTY NEXT 50 · NSE spot"),
-    "SENSEX": ("BSE", "SENSEX", "SENSEX · BSE spot"),
-    "BANKEX": ("BSE", "BANKEX", "BANKEX · BSE spot"),
+    "NIFTY": ("NSE", "NIFTY 50", "NIFTY 50 · NIFTY spot"),
+    "BANKNIFTY": ("NSE", "NIFTY BANK", "BANK NIFTY · BANKNIFTY spot"),
+    "FINNIFTY": ("NSE", "NIFTY FIN SERVICE", "FINNIFTY · FINNIFTY spot"),
+    "MIDCPNIFTY": ("NSE", "NIFTY MID SELECT", "MIDCPNIFTY · MIDCPNIFTY spot"),
+    "NIFTYNXT50": ("NSE", "NIFTY NEXT 50", "NIFTY NEXT 50 · NIFTYNXT50 spot"),
+    "SENSEX": ("BSE", "SENSEX", "SENSEX · SENSEX spot"),
+    "BANKEX": ("BSE", "BANKEX", "BANKEX · BANKEX spot"),
 }
 
 _cache = {}

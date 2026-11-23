@@ -21,7 +21,9 @@ import { OfficialNewsPanel } from "./EnergyPanels";
 import CrudeOilPanel from "./LiveCrudeOilPanel";
 import LiveConfluencePanel from "./LiveConfluencePanel";
 import WeightedSetupPanel from "./WeightedSetupPanel";
-import IndicatorCandleChart from "./IndicatorCandleChart";
+import IndicatorCandleChart, {
+  type ChartStats
+} from "./IndicatorCandleChart";
 import { apiUrl } from "./config/api";
 
 const navItems = [
@@ -34,8 +36,6 @@ const navItems = [
   "Settings"
 ];
 
-// Supported market selector options.
-// The backend must support each symbol before its data can load.
 const optionMarkets = [
   { symbol: "NIFTY", label: "NIFTY 50" },
   { symbol: "BANKNIFTY", label: "BANK NIFTY" },
@@ -98,20 +98,6 @@ interface OptionChainData {
   level_scope?: string;
 }
 
-interface ChartIndicators {
-  ltp: number;
-  change: number | null;
-  change_pct: number | null;
-  ema9: number | null;
-  ema21: number | null;
-  ma8?: number | null;
-  wma8?: number | null;
-  vwap: number | null;
-  rsi14: number | null;
-  macd: string;
-  instrument?: string;
-}
-
 function PanelTitle({
   children,
   icon
@@ -131,7 +117,7 @@ export default function App() {
   const [search, setSearch] = useState("");
   const [timeframe, setTimeframe] = useState("5m");
 
-  // Selected option-chain market
+  // Selected option-chain market.
   const [selectedMarket, setSelectedMarket] = useState("NIFTY");
 
   const [tradeMode, setTradeMode] = useState("Manual");
@@ -140,19 +126,21 @@ export default function App() {
   const [sound, setSound] = useState(true);
   const [notice, setNotice] = useState("");
 
-  // Backend Dynamic Options States
+  // Option-chain states.
   const [chainError, setChainError] = useState("");
   const chainRequest = useRef(0);
   const [chainData, setChainData] = useState<OptionChainData | null>(null);
   const [liveOi, setLiveOi] = useState<OILiveSnapshot | null>(null);
-  const [selectedExpiry, setSelectedExpiry] = useState<string>("");
-  const [strikeRange, setStrikeRange] = useState<number>(7);
-  const [backendOnline, setBackendOnline] = useState<boolean>(false);
-  const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
-  const [candleStatus, setCandleStatus] = useState("Loading Kite candles…");
-  const [chartIndicators, setChartIndicators] = useState<ChartIndicators | null>(null);
+  const [selectedExpiry, setSelectedExpiry] = useState("");
+  const [strikeRange, setStrikeRange] = useState(7);
+  const [backendOnline, setBackendOnline] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
-  // Scanner quotes
+  // Candle-chart states.
+  const [candleStatus, setCandleStatus] = useState("Loading Kite candles…");
+  const [chartIndicators, setChartIndicators] = useState<ChartStats | null>(null);
+
+  // Scanner quote states.
   const [stocks, setStocks] = useState<string[][]>([]);
   const [stockSnapshotAt, setStockSnapshotAt] = useState("");
   const [stockQuoteError, setStockQuoteError] = useState("");
@@ -162,7 +150,7 @@ export default function App() {
   const [scannerSector, setScannerSector] = useState("All Sectors");
   const [scannerSort, setScannerSort] = useState("Strongest");
 
-  // Fetch live stock quotes
+  // Fetch live stock quotes.
   useEffect(() => {
     let active = true;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -297,13 +285,13 @@ export default function App() {
     window.setTimeout(() => setNotice(""), 2600);
   };
 
-  // Market selection
+  // Change selected market and clear previous market data.
   const handleMarketChange = (symbol: string) => {
     if (selectedMarket === symbol) return;
 
     const market = optionMarkets.find(m => m.symbol === symbol);
 
-    // Cancel pending requests for the previous market
+    // Invalidate pending option-chain requests.
     chainRequest.current++;
 
     setSelectedMarket(symbol);
@@ -313,13 +301,33 @@ export default function App() {
     setLiveOi(null);
     setBackendOnline(false);
 
+    // Do not show previous market's chart values.
+    setChartIndicators(null);
+    setCandleStatus(`Loading ${symbol} Kite candles…`);
+
     notify(`Switching to ${market?.label || symbol}...`);
   };
 
-  // Use the exact live OI snapshot supplied by OISignalChart.
+  // Receive OI snapshot from OISignalChart.
   const handleOiUpdate = useCallback((snapshot: OILiveSnapshot | null) => {
     setLiveOi(snapshot);
   }, []);
+
+  // Receive chart indicators from IndicatorCandleChart.
+  // useCallback keeps these functions stable and prevents unnecessary chart reloads.
+  const handleIndicatorsUpdate = useCallback(
+    (indicators: ChartStats | null) => {
+      setChartIndicators(indicators);
+    },
+    []
+  );
+
+  const handleStatusUpdate = useCallback(
+    (message: string) => {
+      setCandleStatus(message);
+    },
+    []
+  );
 
   const oiSignal = useMemo(() => {
     const oiThreshold = 1_000_000;
@@ -389,7 +397,7 @@ export default function App() {
     };
   }, [liveOi, chartIndicators]);
 
-  // Fetch dynamic option chain from FastAPI backend
+  // Fetch dynamic option chain from FastAPI backend.
   const fetchOptionChain = useCallback(
     async (exp?: string, rangeCount: number = strikeRange) => {
       const requestId = ++chainRequest.current;
@@ -397,7 +405,6 @@ export default function App() {
       try {
         const url = new URL(apiUrl("/api/options/chain"));
 
-        // Selected market is sent to the backend
         url.searchParams.set("symbol", selectedMarket);
 
         const targetExp = exp || selectedExpiry;
@@ -473,7 +480,7 @@ export default function App() {
     }, 600);
   };
 
-  // Poll selected market option chain
+  // Poll selected market option chain.
   useEffect(() => {
     let active = true;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -827,8 +834,8 @@ export default function App() {
           <IndicatorCandleChart
             symbol={selectedMarket}
             timeframe={timeframe}
-            onIndicatorsUpdate={setChartIndicators}
-            onStatusUpdate={setCandleStatus}
+            onIndicatorsUpdate={handleIndicatorsUpdate}
+            onStatusUpdate={handleStatusUpdate}
           />
 
           <div className="oi-caption" role="status">
@@ -851,7 +858,6 @@ export default function App() {
               }
             </PanelTitle>
 
-            {/* HORIZONTAL MARKET SELECTOR */}
             <div className="market-selector">
               {optionMarkets.map(market => (
                 <button
@@ -888,8 +894,7 @@ export default function App() {
               <select
                 value={strikeRange}
                 onChange={e => {
-                  const r = Number(e.target.value);
-                  setStrikeRange(r);
+                  setStrikeRange(Number(e.target.value));
                 }}
               >
                 <option value={5}>±5 Strikes</option>
@@ -925,7 +930,6 @@ export default function App() {
               OI Chg%: versus previous trading-session close. Dash = baseline loading/unavailable.
             </div>
 
-            {/* COMBINED CALL + PUT OPTION CHAIN */}
             <div className="table-scroll">
               <table className="option-table">
                 <thead>

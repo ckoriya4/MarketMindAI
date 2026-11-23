@@ -61,8 +61,10 @@ const timeframeOptions = [
   { label: "3 Minutes", value: "3m" },
   { label: "5 Minutes", value: "5m" },
   { label: "15 Minutes", value: "15m" },
+  { label: "30 Minutes", value: "30m" },
   { label: "1 Hour", value: "1H" },
-  { label: "1 Day", value: "1D" }
+  { label: "1 Day", value: "1D" },
+  { label: "1 Week", value: "W" }
 ];
 
 const fields: Record<string, string> = {
@@ -79,21 +81,21 @@ const fields: Record<string, string> = {
 };
 
 const colors: Record<string, string> = {
-  ma8: "#00e5a0",
-  wma8: "#ff4fd8",
+  ma8: "#085740ff",
+  wma8: "#b50842ff",
   ema9: "#00a6ff",
   ema21: "#f5b82e",
   ema50: "#da7dff",
   ema200: "#f58052",
-  vwap: "#e8ddff",
-  bb_upper: "#7ca5bc",
-  bb_middle: "#7ca5bc",
-  bb_lower: "#7ca5bc",
-  rsi14: "#c477ff",
-  atr14: "#ffb765",
-  macd_line: "#00b6ff",
-  macd_signal: "#ffbb44",
-  volume: "#26a69a"
+  vwap: "#4a0cceff",
+  bb_upper: "#3ada9dff",
+  bb_middle: "#7db2d0ff",
+  bb_lower: "#d1346eff",
+  rsi14: "#9013f0ff",
+  atr14: "#3e8ef0ff",
+  macd_line: "#0e16fdff",
+  macd_signal: "#f5a110ff",
+  volume: "#19e6d2ff"
 };
 
 const normalizeTimeframe = (value: string) => {
@@ -101,6 +103,7 @@ const normalizeTimeframe = (value: string) => {
 
   if (normalized === "1hour" || normalized === "1h") return "1H";
   if (normalized === "1d") return "1D";
+  if (normalized === "1w" || normalized === "w") return "W";
 
   return normalized;
 };
@@ -121,18 +124,17 @@ export default function IndicatorCandleChart({
   const range = useRef<LogicalRange | null>(null);
   const chartKey = useRef("");
 
-  // This selector remains unchanged.
-  // NIFTY_FUT is retained as the optional NIFTY futures selection.
   const [instrument, setInstrument] = useState("NIFTY");
 
-  // Use the selected Option Chain market for the spot chart.
+  const marketSymbol = symbol.toUpperCase();
+
   const effectiveInstrument =
-    instrument === "NIFTY_FUT" && symbol.toUpperCase() === "NIFTY"
+    instrument === "NIFTY_FUT" && marketSymbol === "NIFTY"
       ? "NIFTY_FUT"
-      : symbol.toUpperCase();
+      : marketSymbol;
 
   const [selectedTimeframe, setSelectedTimeframe] = useState(
-    normalizeTimeframe(timeframe || "1m")
+    normalizeTimeframe(timeframe || "5m")
   );
 
   const [enabled, setEnabled] = useState([
@@ -154,18 +156,23 @@ export default function IndicatorCandleChart({
   } | null>(null);
 
   const [now, setNow] = useState(Date.now());
-
   const [stats, setStats] = useState<ChartStats | null>(null);
   const [note, setNote] = useState("");
 
-  // Keep timeframe synchronized if parent changes it.
+  // Reset NIFTY futures selection when the selected market changes.
   useEffect(() => {
-    setSelectedTimeframe(normalizeTimeframe(timeframe || "1m"));
+    setInstrument("NIFTY");
+    range.current = null;
+  }, [marketSymbol]);
+
+  // Keep chart timeframe synchronized with the parent.
+  useEffect(() => {
+    setSelectedTimeframe(normalizeTimeframe(timeframe || "5m"));
   }, [timeframe]);
 
   // Update quote freshness display every second.
   useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 1000);
+    const id = setInterval(() => setNow(Date.now()));
     return () => clearInterval(id);
   }, []);
 
@@ -257,7 +264,7 @@ export default function IndicatorCandleChart({
       return series;
     };
 
-    // MA8 and WMA8: lines only, no trading signal.
+    // MA8 and WMA8.
     for (const name of ["MA8", "WMA8"]) {
       if (enabled.includes(name)) {
         addLine(fields[name]);
@@ -371,7 +378,9 @@ export default function IndicatorCandleChart({
     setNote("");
     onIndicatorsUpdate(null);
 
-    onStatusUpdate("Loading Kite candles and indicators…");
+    onStatusUpdate(
+      `Loading ${effectiveInstrument} Kite candles and indicators…`
+    );
 
     const load = async () => {
       controller = new AbortController();
@@ -408,7 +417,8 @@ export default function IndicatorCandleChart({
 
         if (
           data.source !== "kite" ||
-          !data.candles?.length
+          !Array.isArray(data.candles) ||
+          data.candles.length === 0
         ) {
           throw new Error("Actual Kite candles required");
         }
@@ -487,8 +497,8 @@ export default function IndicatorCandleChart({
         );
 
         // Update every visible indicator line.
-        for (const [key, series] of Object.entries(lines)) {
-          series.setData(withSession(data[key] || []));
+        for (const [lineKey, series] of Object.entries(lines)) {
+          series.setData(withSession(data[lineKey] || []));
         }
 
         // MACD histogram.
@@ -621,17 +631,24 @@ export default function IndicatorCandleChart({
     <>
       <div className="candle-indicator-controls">
 
-        {/* Instrument selector - existing design preserved */}
+        {/* Instrument selector */}
         <select
           aria-label="Chart instrument"
-          value={instrument}
+          value={effectiveInstrument}
           onChange={e => {
             range.current = null;
             setInstrument(e.target.value);
           }}
         >
-          <option value="NIFTY">NIFTY 50 · spot</option>
-          <option value="NIFTY_FUT">NIFTY · front futures</option>
+          <option value={marketSymbol}>
+            {marketSymbol} · spot
+          </option>
+
+          {marketSymbol === "NIFTY" && (
+            <option value="NIFTY_FUT">
+              NIFTY · front futures
+            </option>
+          )}
         </select>
 
         {/* Timeframe selector */}
@@ -775,12 +792,14 @@ export default function IndicatorCandleChart({
         ))}
       </div>
 
+      {/* 
       <div className="oi-caption">
         {note} · Indicators are computed from Kite OHLCV data.
         Refresh interval: 3 seconds. MACD 12/26/9 · RSI/ATR 14 ·
         Bollinger 20,2 · MA8 simple moving average · WMA8 weighted
         moving average.
       </div>
+      */}
     </>
   );
 }
