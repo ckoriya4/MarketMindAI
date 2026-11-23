@@ -15,7 +15,7 @@ export default function SectorSummary({ stocks, metadata, fetchedAt, error }: {
   useEffect(() => { const timer = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(timer); }, []);
   const parsed = Date.parse(fetchedAt);
   const stale = !!error || !Number.isFinite(parsed) || now - parsed > 45000;
-  const covered = sectors.reduce((sum, s) => sum + s.covered, 0);
+  // const covered = sectors.reduce((sum, s) => sum + s.covered, 0);
   const total = sectors.reduce((sum, s) => sum + s.stocks, 0);
 
   return <section className="sector-summary" aria-label="NIFTY 50 sector breakdown">
