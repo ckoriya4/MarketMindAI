@@ -40,12 +40,12 @@ const MARKET_LIST = [
   { id: "BANKEX", name: "BANKEX" },
 ];
 
-const EMPTY = MARKET_LIST.map((market) => ({
-  ...market,
-  price: null,
-  status: "loading",
-  history: [],
-})) as MarketCardData[];
+// const EMPTY = MARKET_LIST.map((market) => ({
+//   ...market,
+//   price: null,
+//   status: "loading",
+//   history: [],
+// })) as MarketCardData[];
 
 const signed = (n: number) =>
   `${n >= 0 ? "+" : ""}${n.toFixed(2)}`;
