@@ -157,7 +157,7 @@ export default function IndicatorCandleChart({
 
   const [now, setNow] = useState(Date.now());
   const [stats, setStats] = useState<ChartStats | null>(null);
-  const [note, setNote] = useState("");
+  // const [note, setNote] = useState("");
 
   // Reset NIFTY futures selection when the selected market changes.
   useEffect(() => {
@@ -375,7 +375,7 @@ export default function IndicatorCandleChart({
 
     setStats(null);
     setFeed(null);
-    setNote("");
+    // setNote("");
     onIndicatorsUpdate(null);
 
     onStatusUpdate(
@@ -561,7 +561,7 @@ export default function IndicatorCandleChart({
 
         setStats(value);
         onIndicatorsUpdate(value);
-        setNote(data.vwap_note || "");
+        // setNote(data.vwap_note || "");
 
         onStatusUpdate(
           `${data.status === "fresh" ? "Kite data" : "STALE Kite data"} · ${data.status} · ${data.instrument} · ${bars.length} bars · last candle ${new Date(Number(bars[bars.length - 1].time) * 1000).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })} IST · refresh 3s`
