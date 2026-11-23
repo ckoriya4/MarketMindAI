@@ -38,6 +38,7 @@ const MARKET_LIST = [
   { id: "NIFTYNXT50", name: "NIFTY NEXT 50" },
   { id: "SENSEX", name: "SENSEX" },
   { id: "BANKEX", name: "BANKEX" },
+  { id: "CRUDE", name: "CRUDE OIL" },
 ];
 
 // const EMPTY = MARKET_LIST.map((market) => ({
