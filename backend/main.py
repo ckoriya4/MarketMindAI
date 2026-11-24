@@ -42,6 +42,12 @@ from .services.option_chain import (
     get_upcoming_expiries
 )
 
+# Historical option-chain PostgreSQL service.
+from .services.option_chain_history import (
+    get_option_history_dates,
+    get_historical_option_chain
+)
+
 from .services.chart_service import get_chart_data
 
 from .services.oi_signal import router as oi_signal_router
@@ -425,7 +431,7 @@ def expiries():
 
 
 # ---------------------------------------------------------
-# OPTIONS CHAIN
+# LIVE OPTIONS CHAIN
 # ---------------------------------------------------------
 
 @app.get("/api/options/chain")
@@ -459,6 +465,51 @@ def option_chain(
         expiry=expiry,
         num_strikes=num_strikes,
         custom_spot=current_spot
+    )
+
+
+# ---------------------------------------------------------
+# HISTORICAL OPTIONS CHAIN - AVAILABLE DATES
+# ---------------------------------------------------------
+
+@app.get("/api/options/history/dates")
+def option_history_dates(
+
+    symbol: str = Query("NIFTY")
+
+):
+
+    return get_option_history_dates(
+        symbol=symbol
+    )
+
+
+# ---------------------------------------------------------
+# HISTORICAL OPTIONS CHAIN - SELECTED DATE
+# ---------------------------------------------------------
+
+@app.get("/api/options/history")
+def historical_option_chain(
+
+    symbol: str = Query("NIFTY"),
+
+    history_date: str = Query(...),
+
+    expiry: Optional[str] = Query(None),
+
+    num_strikes: int = Query(
+        7,
+        ge=3,
+        le=50
+    )
+
+):
+
+    return get_historical_option_chain(
+        symbol=symbol,
+        history_date=history_date,
+        expiry=expiry,
+        num_strikes=num_strikes
     )
 
 
