@@ -483,6 +483,66 @@ def enrich(full, volume_supported=False):
     ind["pvt"] = last(result["pvt"])
 
     # --------------------------------------------------
+    # PVT EMA 9 - SIGNAL LINE
+    #
+    # Calculated only from actual PVT values derived from
+    # actual traded volume. No synthetic volume is used.
+    # --------------------------------------------------
+
+    pvt_signal_line_values = [None] * n
+
+    valid_pvt_values = (
+        has_volume_data
+        and n >= 9
+        and all(
+            value is not None
+            and isinstance(value, (int, float))
+            and math.isfinite(value)
+            for value in pvt_values
+        )
+    )
+
+    if valid_pvt_values:
+        pvt_ema9 = ema(
+            [float(value) for value in pvt_values],
+            9
+        )
+
+        pvt_signal_line_values = [
+            pvt_ema9[i] if i >= 8 else None
+            for i in range(n)
+        ]
+
+    result["pvt_signal_line"] = series(
+        pvt_signal_line_values
+    )
+
+    ind["pvt_signal_line"] = last(
+        result["pvt_signal_line"]
+    )
+
+    # PVT above EMA9 = BUY
+    # PVT below EMA9 = SELL
+    # Equal values = NEUTRAL
+    # Missing actual volume/history = UNAVAILABLE
+
+    if (
+        ind["pvt"] is not None
+        and ind["pvt_signal_line"] is not None
+    ):
+        if ind["pvt"] > ind["pvt_signal_line"]:
+            ind["pvt_signal"] = "BUY"
+
+        elif ind["pvt"] < ind["pvt_signal_line"]:
+            ind["pvt_signal"] = "SELL"
+
+        else:
+            ind["pvt_signal"] = "NEUTRAL"
+
+    else:
+        ind["pvt_signal"] = "UNAVAILABLE"
+
+    # --------------------------------------------------
     # DATA AVAILABILITY
     # --------------------------------------------------
 
@@ -503,7 +563,7 @@ def enrich(full, volume_supported=False):
 
     else:
         volume_note = (
-            "Actual Kite futures traded volume is being used."
+            "Actual Kite contract traded volume is being used."
         )
 
     result["vwap_note"] = (
@@ -521,8 +581,8 @@ def enrich(full, volume_supported=False):
     )
 
     result["pvt_note"] = (
-        "PVT calculated from actual traded volume."
-        if has_volume_data
+        "PVT and PVT EMA9 calculated from actual traded volume."
+        if has_volume_data and ind["pvt_signal_line"] is not None
         else volume_note
     )
 
@@ -535,7 +595,8 @@ def enrich(full, volume_supported=False):
         "Bollinger20 ±2 population SD; "
         "VWAP uses session typical price × actual volume; "
         "MFI uses 14-period positive/negative money flow; "
-        "PVT uses close-to-close percentage change × actual volume. "
+        "PVT uses close-to-close percentage change × actual volume; "
+        "PVT signal uses EMA9 of PVT. "
         "Values include latest provider candle, which may be forming."
     )
 
