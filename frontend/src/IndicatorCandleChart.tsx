@@ -489,6 +489,7 @@ export default function IndicatorCandleChart({
       );
 
       try {
+        // Build the request for the selected instrument.
         const params = new URLSearchParams({
           symbol: isOptionChart ? marketSymbol : effectiveInstrument,
           timeframe: selectedTimeframe,
@@ -496,11 +497,15 @@ export default function IndicatorCandleChart({
           session: "true"
         });
 
-        // Send the selected option contract to the backend.
+        let endpoint = "/api/chart/candles";
+
         if (isOptionChart) {
           if (!expiry) {
             throw new Error("Select an option expiry first.");
           }
+
+          // Dedicated actual Kite option-contract endpoint.
+          endpoint = "/api/chart/option-candles";
 
           params.set("expiry", expiry);
           params.set("strike", String(chartStrike));
@@ -508,7 +513,7 @@ export default function IndicatorCandleChart({
         }
 
         const response = await fetch(
-          apiUrl(`/api/chart/candles?${params.toString()}`),
+          apiUrl(`${endpoint}?${params.toString()}`),
           { signal: currentController.signal }
         );
 
@@ -530,6 +535,7 @@ export default function IndicatorCandleChart({
           throw new Error("Actual Kite candles required");
         }
 
+        // Verify that the returned underlying matches the selection.
         if (
           data.symbol &&
           String(data.symbol).toUpperCase() !==
@@ -542,10 +548,34 @@ export default function IndicatorCandleChart({
           );
         }
 
+        // Verify the exact returned option contract.
+        if (isOptionChart) {
+          const returnedStrike =
+            Number(data.option_contract?.strike ?? data.selected_strike);
+
+          const returnedType =
+            String(
+              data.option_contract?.option_type ??
+              data.selected_option_type ??
+              ""
+            ).toUpperCase();
+
+          if (
+            returnedStrike !== chartStrike ||
+            returnedType !== optionType
+          ) {
+            throw new Error(
+              `Backend returned a different option contract. Expected ${chartStrike} ${optionType}.`
+            );
+          }
+        }
+
         if (!active) return;
 
+        const quoteStatus = data.quote_status || data.status;
+
         setFeed({
-          status: data.status,
+          status: quoteStatus,
           quoteTime: data.quote_time ?? null,
           key: data.quote_key || data.instrument,
           warmup: data.warmup_bars || 0,
@@ -557,11 +587,11 @@ export default function IndicatorCandleChart({
           const options = {
             price: data.indicators.ltp,
             title:
-              data.quote_status === "fresh"
+              quoteStatus === "fresh"
                 ? "Kite LTP"
                 : "STALE / UNVERIFIED LTP",
             color:
-              data.quote_status === "fresh"
+              quoteStatus === "fresh"
                 ? "#00d6a3"
                 : "#8fa1b2",
             axisLabelVisible: true
@@ -668,7 +698,7 @@ export default function IndicatorCandleChart({
         onIndicatorsUpdate(value);
 
         onStatusUpdate(
-          `${data.status === "fresh" ? "Kite data" : "STALE Kite data"} · ${data.status} · ${data.instrument} · ${bars.length} bars · last candle ${new Date(
+          `${quoteStatus === "fresh" ? "Kite data" : "STALE Kite data"} · ${quoteStatus} · ${data.instrument} · ${bars.length} bars · last candle ${new Date(
             Number(bars[bars.length - 1].time) * 1000
           ).toLocaleString("en-IN", {
             timeZone: "Asia/Kolkata"
