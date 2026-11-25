@@ -29,10 +29,12 @@ export interface ChartStats {
   ema21: number | null;
   vwap: number | null;
   rsi14: number | null;
+  mfi14?: number | null;
+  pvt?: number | null;
   macd: string;
   ma8: number | null;
   wma8: number | null;
-  [key: string]: number | string | null;
+  [key: string]: number | string | null | undefined;
 }
 
 interface Point {
@@ -53,6 +55,8 @@ const overlays = [
   "RSI",
   "MACD",
   "ATR",
+  "MFI",
+  "PVT",
   "Volume"
 ];
 
@@ -77,6 +81,8 @@ const fields: Record<string, string> = {
   VWAP: "vwap",
   RSI: "rsi14",
   ATR: "atr14",
+  MFI: "mfi14",
+  PVT: "pvt",
   Volume: "volume"
 };
 
@@ -95,15 +101,25 @@ const colors: Record<string, string> = {
   atr14: "#3e8ef0ff",
   macd_line: "#0e16fdff",
   macd_signal: "#f5a110ff",
+  mfi14: "#e6a23c",
+  pvt: "#19b7df",
   volume: "#19e6d2ff"
 };
 
 const normalizeTimeframe = (value: string) => {
   const normalized = value.toLowerCase();
 
-  if (normalized === "1hour" || normalized === "1h") return "1H";
-  if (normalized === "1d") return "1D";
-  if (normalized === "1w" || normalized === "w") return "W";
+  if (normalized === "1hour" || normalized === "1h") {
+    return "1H";
+  }
+
+  if (normalized === "1d") {
+    return "1D";
+  }
+
+  if (normalized === "1w" || normalized === "w") {
+    return "W";
+  }
 
   return normalized;
 };
@@ -124,27 +140,35 @@ export default function IndicatorCandleChart({
   const range = useRef<LogicalRange | null>(null);
   const chartKey = useRef("");
 
-  const [instrument, setInstrument] = useState("NIFTY");
-
   const marketSymbol = symbol.toUpperCase();
+
+  // NIFTY front-month futures is the default chart instrument.
+  const [instrument, setInstrument] = useState(
+    marketSymbol === "NIFTY"
+      ? "NIFTY_FUT"
+      : marketSymbol
+  );
 
   const effectiveInstrument =
     instrument === "NIFTY_FUT" && marketSymbol === "NIFTY"
       ? "NIFTY_FUT"
       : marketSymbol;
 
+  // Default timeframe: 15 minutes.
   const [selectedTimeframe, setSelectedTimeframe] = useState(
-    normalizeTimeframe(timeframe || "5m")
+    normalizeTimeframe(timeframe || "15m")
   );
 
+  // Default enabled indicators.
+  // MACD enables both MACD line and MACD signal.
   const [enabled, setEnabled] = useState([
     "MA8",
     "WMA8",
-    "EMA9",
-    "EMA21",
-    "RSI",
     "MACD",
-    "Volume"
+    "VWAP",
+    "Volume",
+    "MFI",
+    "PVT"
   ]);
 
   const [feed, setFeed] = useState<{
@@ -157,27 +181,45 @@ export default function IndicatorCandleChart({
 
   const [now, setNow] = useState(Date.now());
   const [stats, setStats] = useState<ChartStats | null>(null);
-  // const [note, setNote] = useState("");
 
-  // Reset NIFTY futures selection when the selected market changes.
+  // Reset to NIFTY futures whenever NIFTY is selected.
+  // Other selected indices use their own spot instrument.
   useEffect(() => {
-    setInstrument("NIFTY");
+    setInstrument(
+      marketSymbol === "NIFTY"
+        ? "NIFTY_FUT"
+        : marketSymbol
+    );
+
     range.current = null;
   }, [marketSymbol]);
 
-  // Keep chart timeframe synchronized with the parent.
+  // Keep chart timeframe synchronized with App.tsx.
   useEffect(() => {
-    setSelectedTimeframe(normalizeTimeframe(timeframe || "5m"));
+    setSelectedTimeframe(
+      normalizeTimeframe(timeframe || "15m")
+    );
   }, [timeframe]);
 
   // Update quote freshness display every second.
   useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 1000);
+    const id = setInterval(
+      () => setNow(Date.now()),
+      1000
+    );
+
     return () => clearInterval(id);
   }, []);
 
   const panes = enabled.filter(s =>
-    ["RSI", "MACD", "ATR", "Volume"].includes(s)
+    [
+      "RSI",
+      "MACD",
+      "ATR",
+      "MFI",
+      "PVT",
+      "Volume"
+    ].includes(s)
   ).length;
 
   useEffect(() => {
@@ -192,6 +234,7 @@ export default function IndicatorCandleChart({
 
     const chart = createChart(host.current, {
       autoSize: true,
+
       layout: {
         background: {
           type: ColorType.Solid,
@@ -200,16 +243,24 @@ export default function IndicatorCandleChart({
         textColor: "#9cb0c6",
         fontSize: 10
       },
+
       grid: {
-        vertLines: { color: "#12283a" },
-        horzLines: { color: "#12283a" }
+        vertLines: {
+          color: "#12283a"
+        },
+        horzLines: {
+          color: "#12283a"
+        }
       },
+
       rightPriceScale: {
         borderColor: "#1b3447"
       },
+
       timeScale: {
         timeVisible: true,
         borderColor: "#1b3447",
+
         tickMarkFormatter: (t: Time) =>
           new Date(Number(t) * 1000).toLocaleTimeString(
             "en-IN",
@@ -221,11 +272,14 @@ export default function IndicatorCandleChart({
             }
           )
       },
+
       localization: {
         timeFormatter: (t: Time) =>
           new Date(Number(t) * 1000).toLocaleString(
             "en-IN",
-            { timeZone: "Asia/Kolkata" }
+            {
+              timeZone: "Asia/Kolkata"
+            }
           )
       }
     });
@@ -261,17 +315,24 @@ export default function IndicatorCandleChart({
       );
 
       lines[key] = series;
+
       return series;
     };
 
-    // MA8 and WMA8.
+    // --------------------------------------------------
+    // MA8 AND WMA8
+    // --------------------------------------------------
+
     for (const name of ["MA8", "WMA8"]) {
       if (enabled.includes(name)) {
         addLine(fields[name]);
       }
     }
 
-    // EMA and VWAP overlays.
+    // --------------------------------------------------
+    // EMA AND VWAP OVERLAYS
+    // --------------------------------------------------
+
     for (const name of [
       "EMA9",
       "EMA21",
@@ -284,7 +345,10 @@ export default function IndicatorCandleChart({
       }
     }
 
-    // Bollinger Bands.
+    // --------------------------------------------------
+    // BOLLINGER BANDS
+    // --------------------------------------------------
+
     if (enabled.includes("Bollinger")) {
       for (const key of [
         "bb_upper",
@@ -297,7 +361,10 @@ export default function IndicatorCandleChart({
 
     let pane = 1;
 
-    // RSI pane.
+    // --------------------------------------------------
+    // RSI PANE
+    // --------------------------------------------------
+
     if (enabled.includes("RSI")) {
       const rsi = addLine("rsi14", pane++);
 
@@ -322,7 +389,10 @@ export default function IndicatorCandleChart({
       });
     }
 
-    // MACD pane.
+    // --------------------------------------------------
+    // MACD PANE
+    // --------------------------------------------------
+
     let macdHistogram: ISeriesApi<"Histogram"> | undefined;
 
     if (enabled.includes("MACD")) {
@@ -339,18 +409,62 @@ export default function IndicatorCandleChart({
       );
     }
 
-    // ATR pane.
+    // --------------------------------------------------
+    // ATR PANE
+    // --------------------------------------------------
+
     if (enabled.includes("ATR")) {
       addLine("atr14", pane++);
     }
 
-    // Volume pane.
+    // --------------------------------------------------
+    // MFI PANE
+    // --------------------------------------------------
+
+    if (enabled.includes("MFI")) {
+      const mfi = addLine("mfi14", pane++);
+
+      for (const level of [20, 50, 80]) {
+        mfi.createPriceLine({
+          price: level,
+          color: level === 50 ? "#566778" : "#b58a42",
+          lineWidth: 1,
+          lineStyle: LineStyle.Dashed,
+          axisLabelVisible: true,
+          title: String(level)
+        });
+      }
+
+      mfi.applyOptions({
+        autoscaleInfoProvider: () => ({
+          priceRange: {
+            minValue: 0,
+            maxValue: 100
+          }
+        })
+      });
+    }
+
+    // --------------------------------------------------
+    // PVT PANE
+    // --------------------------------------------------
+
+    if (enabled.includes("PVT")) {
+      addLine("pvt", pane++);
+    }
+
+    // --------------------------------------------------
+    // VOLUME PANE
+    // --------------------------------------------------
+
     const volume = enabled.includes("Volume")
       ? chart.addSeries(
         HistogramSeries,
         {
           title: "Volume",
-          priceFormat: { type: "volume" },
+          priceFormat: {
+            type: "volume"
+          },
           priceLineVisible: false,
           lastValueVisible: true
         },
@@ -375,7 +489,6 @@ export default function IndicatorCandleChart({
 
     setStats(null);
     setFeed(null);
-    // setNote("");
     onIndicatorsUpdate(null);
 
     onStatusUpdate(
@@ -402,7 +515,9 @@ export default function IndicatorCandleChart({
 
         const response = await fetch(
           apiUrl(`/api/chart/candles?${params.toString()}`),
-          { signal: currentController.signal }
+          {
+            signal: currentController.signal
+          }
         );
 
         const data = await response.json();
@@ -420,10 +535,12 @@ export default function IndicatorCandleChart({
           !Array.isArray(data.candles) ||
           data.candles.length === 0
         ) {
-          throw new Error("Actual Kite candles required");
+          throw new Error(
+            "Actual Kite candles required"
+          );
         }
 
-        // Validate the actual market symbol, not the display label.
+        // Validate canonical symbol rather than display label.
         if (
           data.symbol &&
           String(data.symbol).toUpperCase() !==
@@ -448,14 +565,17 @@ export default function IndicatorCandleChart({
         if (typeof data.indicators?.ltp === "number") {
           const options = {
             price: data.indicators.ltp,
+
             title:
               data.quote_status === "fresh"
                 ? "Kite LTP"
                 : "STALE / UNVERIFIED LTP",
+
             color:
               data.quote_status === "fresh"
                 ? "#00d6a3"
                 : "#8fa1b2",
+
             axisLabelVisible: true
           };
 
@@ -496,9 +616,11 @@ export default function IndicatorCandleChart({
             : bars
         );
 
-        // Update every visible indicator line.
+        // Update all indicator lines.
         for (const [lineKey, series] of Object.entries(lines)) {
-          series.setData(withSession(data[lineKey] || []));
+          series.setData(
+            withSession(data[lineKey] || [])
+          );
         }
 
         // MACD histogram.
@@ -543,8 +665,10 @@ export default function IndicatorCandleChart({
             scroll.showWindow(
               data.session
                 ? Math.floor(
-                  (bars[bars.length - 1].time -
-                    data.session.open) / 60
+                  (
+                    bars[bars.length - 1].time -
+                    data.session.open
+                  ) / 60
                 )
                 : total - 1,
               60
@@ -561,10 +685,13 @@ export default function IndicatorCandleChart({
 
         setStats(value);
         onIndicatorsUpdate(value);
-        // setNote(data.vwap_note || "");
 
         onStatusUpdate(
-          `${data.status === "fresh" ? "Kite data" : "STALE Kite data"} · ${data.status} · ${data.instrument} · ${bars.length} bars · last candle ${new Date(Number(bars[bars.length - 1].time) * 1000).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })} IST · refresh 3s`
+          `${data.status === "fresh" ? "Kite data" : "STALE Kite data"} · ${data.status} · ${data.instrument} · ${bars.length} bars · last candle ${new Date(
+            Number(bars[bars.length - 1].time) * 1000
+          ).toLocaleString("en-IN", {
+            timeZone: "Asia/Kolkata"
+          })} IST · refresh 3s`
         );
 
       } catch (e) {
@@ -586,6 +713,7 @@ export default function IndicatorCandleChart({
             }`
           );
         }
+
       } finally {
         clearTimeout(timeout);
 
@@ -696,7 +824,11 @@ export default function IndicatorCandleChart({
                         ? colors.ma8
                         : name === "WMA8"
                           ? colors.wma8
-                          : undefined
+                          : name === "MFI"
+                            ? colors.mfi14
+                            : name === "PVT"
+                              ? colors.pvt
+                              : undefined
                   }}
                 >
                   {name}
@@ -712,7 +844,9 @@ export default function IndicatorCandleChart({
         className="oi-caption"
         role="status"
         style={{
-          color: isFresh ? "#00d6a3" : "#ffbb55"
+          color: isFresh
+            ? "#00d6a3"
+            : "#ffbb55"
         }}
       >
         {feed ? (
@@ -730,7 +864,9 @@ export default function IndicatorCandleChart({
                 feed.quoteTime * 1000
               ).toLocaleString(
                 "en-IN",
-                { timeZone: "Asia/Kolkata" }
+                {
+                  timeZone: "Asia/Kolkata"
+                }
               )
               : "Timestamp missing"
             } IST · {feed.warmup} warm-up bars · Latest candle{" "}
@@ -773,6 +909,8 @@ export default function IndicatorCandleChart({
           "macd_value",
           "macd_signal",
           "macd_histogram",
+          "mfi14",
+          "pvt",
           "atr14",
           "bb_upper",
           "bb_middle",
@@ -791,15 +929,6 @@ export default function IndicatorCandleChart({
           </span>
         ))}
       </div>
-
-      {/* 
-      <div className="oi-caption">
-        {note} · Indicators are computed from Kite OHLCV data.
-        Refresh interval: 3 seconds. MACD 12/26/9 · RSI/ATR 14 ·
-        Bollinger 20,2 · MA8 simple moving average · WMA8 weighted
-        moving average.
-      </div>
-      */}
     </>
   );
 }

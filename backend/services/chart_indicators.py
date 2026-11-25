@@ -1,7 +1,7 @@
 
 """OHLCV-derived chart indicators; no synthetic prices or volume."""
 
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 import math
 
 IST = timezone(timedelta(hours=5, minutes=30))
@@ -14,8 +14,10 @@ def ema(values, period):
     out = [values[0]]
     alpha = 2 / (period + 1)
 
-    for v in values[1:]:
-        out.append(out[-1] + alpha * (v - out[-1]))
+    for value in values[1:]:
+        out.append(
+            out[-1] + (value - out[-1]) * alpha
+        )
 
     return out
 
@@ -30,32 +32,49 @@ def wilder(values, period):
     result[period - 1] = avg
 
     for i in range(period, len(values)):
-        avg = (avg * (period - 1) + values[i]) / period
+        avg = (
+            avg * (period - 1) + values[i]
+        ) / period
+
         result[i] = avg
 
     return result
 
 
 def enrich(full, volume_supported=False):
-    candles = full['candles']
-    closes = [c['close'] for c in candles]
+    candles = full["candles"]
+    closes = [c["close"] for c in candles]
     n = len(candles)
+
+    volumes = [
+        float(c.get("volume", 0) or 0)
+        for c in candles
+    ]
+
+    has_volume_data = (
+        volume_supported
+        and any(volume > 0 for volume in volumes)
+    )
 
     def series(values):
         return [
             {
-                'time': c['time'],
-                'value': round(v, 5)
+                "time": c["time"],
+                "value": round(v, 5)
             }
             for c, v in zip(candles, values)
-            if v is not None and math.isfinite(v)
+            if (
+                v is not None
+                and isinstance(v, (int, float))
+                and math.isfinite(v)
+            )
         ]
 
     def last(points):
-        return points[-1]['value'] if points else None
+        return points[-1]["value"] if points else None
 
     result = dict(full)
-    ind = dict(full.get('indicators', {}))
+    ind = dict(full.get("indicators", {}))
 
     # --------------------------------------------------
     # EMA 9, 21, 50, 200
@@ -64,13 +83,12 @@ def enrich(full, volume_supported=False):
     for period in (9, 21, 50, 200):
         values = ema(closes, period)
 
-        # Hide EMA until enough candles are available.
-        result[f'ema{period}'] = series([
-            v if i >= period - 1 else None
-            for i, v in enumerate(values)
+        result[f"ema{period}"] = series([
+            value if i >= period - 1 else None
+            for i, value in enumerate(values)
         ])
 
-        ind[f'ema{period}'] = last(result[f'ema{period}'])
+        ind[f"ema{period}"] = last(result[f"ema{period}"])
 
     # --------------------------------------------------
     # MA8 - Simple Moving Average
@@ -82,8 +100,8 @@ def enrich(full, volume_supported=False):
         window = closes[i - 7:i + 1]
         ma8_values[i] = sum(window) / 8
 
-    result['ma8'] = series(ma8_values)
-    ind['ma8'] = last(result['ma8'])
+    result["ma8"] = series(ma8_values)
+    ind["ma8"] = last(result["ma8"])
 
     # --------------------------------------------------
     # WMA8 - Weighted Moving Average
@@ -107,19 +125,21 @@ def enrich(full, volume_supported=False):
 
         wma8_values[i] = weighted_sum / weight_total
 
-    result['wma8'] = series(wma8_values)
-    ind['wma8'] = last(result['wma8'])
+    result["wma8"] = series(wma8_values)
+    ind["wma8"] = last(result["wma8"])
 
     # --------------------------------------------------
-    # MA8 / WMA8 crossover signal
+    # MA8 / WMA8 CROSSOVER SIGNAL
     # --------------------------------------------------
 
-    ma_wma_signal = 'HOLD'
+    ma_wma_signal = "HOLD"
 
     valid_indices = [
         i for i in range(n)
-        if ma8_values[i] is not None
-        and wma8_values[i] is not None
+        if (
+            ma8_values[i] is not None
+            and wma8_values[i] is not None
+        )
     ]
 
     if len(valid_indices) >= 2:
@@ -132,21 +152,19 @@ def enrich(full, volume_supported=False):
         current_ma = ma8_values[current]
         current_wma = wma8_values[current]
 
-        # MA8 crosses above WMA8 = BUY
         if (
             previous_ma <= previous_wma
             and current_ma > current_wma
         ):
-            ma_wma_signal = 'BUY'
+            ma_wma_signal = "BUY"
 
-        # MA8 crosses below WMA8 = SELL
         elif (
             previous_ma >= previous_wma
             and current_ma < current_wma
         ):
-            ma_wma_signal = 'SELL'
+            ma_wma_signal = "SELL"
 
-    ind['ma_wma_signal'] = ma_wma_signal
+    ind["ma_wma_signal"] = ma_wma_signal
 
     # --------------------------------------------------
     # RSI 14
@@ -175,14 +193,9 @@ def enrich(full, volume_supported=False):
                 else 100 - 100 / (1 + g[i] / l[i])
             )
 
-    result['rsi14'] = series(rsi)
-    ind['rsi14'] = last(result['rsi14'])
+    result["rsi14"] = series(rsi)
+    ind["rsi14"] = last(result["rsi14"])
 
-    # --------------------------------------------------
-    # MACD 12 / 26 / 9
-    # --------------------------------------------------
-
-    
     # --------------------------------------------------
     # MACD 12 / 26 / 9
     # --------------------------------------------------
@@ -190,24 +203,18 @@ def enrich(full, volume_supported=False):
     fast = ema(closes, 12)
     slow = ema(closes, 26)
 
-    # MACD line = EMA 12 - EMA 26
     macd = [
         f - s
         for f, s in zip(fast, slow)
     ]
 
-    # Signal EMA must process the complete MACD series.
-    # Do not start signal EMA only at index 25.
     sig = ema(macd, 9)
 
-    # Hide MACD until the slow EMA has sufficient history.
     macd_values = [
         macd[i] if i >= 25 else None
         for i in range(n)
     ]
 
-    # Hide signal until 9 MACD values are available
-    # after the first valid slow EMA value.
     signal_values = [
         sig[i] if i >= 33 else None
         for i in range(n)
@@ -218,33 +225,28 @@ def enrich(full, volume_supported=False):
         for i in range(n)
     ]
 
-    result['macd_line'] = series(macd_values)
+    result["macd_line"] = series(macd_values)
+    result["macd_signal"] = series(signal_values)
+    result["macd_histogram"] = series(histogram_values)
 
-    result['macd_signal'] = series(signal_values)
+    ind["macd_value"] = last(result["macd_line"])
+    ind["macd_signal"] = last(result["macd_signal"])
+    ind["macd_histogram"] = last(result["macd_histogram"])
 
-    result['macd_histogram'] = series(histogram_values)
-
-    ind['macd_value'] = last(result['macd_line'])
-
-    ind['macd_signal'] = last(result['macd_signal'])
-
-    ind['macd_histogram'] = last(result['macd_histogram'])
-
-    ind['macd'] = (
-        'Bullish'
-        if ind['macd_histogram'] is not None
-        and ind['macd_histogram'] > 0
-        else 'Bearish'
-        if ind['macd_histogram'] is not None
-        and ind['macd_histogram'] < 0
-        else 'Neutral'
-        if ind['macd_histogram'] is not None
-        else 'Unavailable'
+    ind["macd"] = (
+        "Bullish"
+        if ind["macd_histogram"] is not None
+        and ind["macd_histogram"] > 0
+        else "Bearish"
+        if ind["macd_histogram"] is not None
+        and ind["macd_histogram"] < 0
+        else "Neutral"
+        if ind["macd_histogram"] is not None
+        else "Unavailable"
     )
 
-
     # --------------------------------------------------
-    # Bollinger Bands 20
+    # BOLLINGER BANDS 20
     # --------------------------------------------------
 
     upper = []
@@ -252,7 +254,11 @@ def enrich(full, volume_supported=False):
     lower = []
 
     for i in range(n):
-        values = closes[i - 19:i + 1] if i >= 19 else []
+        values = (
+            closes[i - 19:i + 1]
+            if i >= 19
+            else []
+        )
 
         mean = sum(values) / 20 if values else None
 
@@ -265,13 +271,17 @@ def enrich(full, volume_supported=False):
         )
 
         middle.append(mean)
-        upper.append(mean + 2 * sd if mean is not None else None)
-        lower.append(mean - 2 * sd if mean is not None else None)
+        upper.append(
+            mean + 2 * sd if mean is not None else None
+        )
+        lower.append(
+            mean - 2 * sd if mean is not None else None
+        )
 
     for key, values in [
-        ('bb_upper', upper),
-        ('bb_middle', middle),
-        ('bb_lower', lower)
+        ("bb_upper", upper),
+        ("bb_middle", middle),
+        ("bb_lower", lower)
     ]:
         result[key] = series(values)
         ind[key] = last(result[key])
@@ -282,105 +292,253 @@ def enrich(full, volume_supported=False):
 
     ranges = [
         max(
-            candles[i]['high'] - candles[i]['low'],
-            abs(candles[i]['high'] - closes[i - 1]),
-            abs(candles[i]['low'] - closes[i - 1])
+            candles[i]["high"] - candles[i]["low"],
+            abs(candles[i]["high"] - closes[i - 1]),
+            abs(candles[i]["low"] - closes[i - 1])
         )
         for i in range(1, n)
     ]
 
-    result['atr14'] = series([
+    result["atr14"] = series([
         None
     ] + wilder(ranges, 14))
 
-    ind['atr14'] = last(result['atr14'])
+    ind["atr14"] = last(result["atr14"])
 
     # --------------------------------------------------
-    # VWAP
+    # VWAP - ACTUAL SESSION VOLUME ONLY
     # --------------------------------------------------
 
     vwap = []
-    cumv = 0
-    cump = 0
-    day = None
+    cumv = 0.0
+    cump = 0.0
+    current_day = None
 
-    for c in candles:
-        d = datetime.fromtimestamp(c['time'], IST).date()
+    if (
+        has_volume_data
+        and full["timeframe"] not in ("1D", "W")
+    ):
+        for c in candles:
+            day = datetime.fromtimestamp(
+                c["time"], IST
+            ).date()
 
-        if day != d:
-            cumv = 0
-            cump = 0
-            day = d
+            if current_day != day:
+                cumv = 0.0
+                cump = 0.0
+                current_day = day
 
-        vol = c.get('volume', 0)
+            volume = float(c.get("volume", 0) or 0)
 
-        if (
-            volume_supported
-            and full['timeframe'] not in ('1D', 'W')
-            and vol > 0
-        ):
-            cumv += vol
+            if volume <= 0:
+                continue
 
-            cump += (
-                (c['high'] + c['low'] + c['close']) / 3
-            ) * vol
+            typical_price = (
+                c["high"] + c["low"] + c["close"]
+            ) / 3
+
+            cumv += volume
+            cump += typical_price * volume
 
             vwap.append({
-                'time': c['time'],
-                'value': round(cump / cumv, 5)
+                "time": c["time"],
+                "value": round(cump / cumv, 5)
             })
 
-    result['vwap'] = vwap
-
-    ind['vwap'] = (
+    result["vwap"] = vwap
+    ind["vwap"] = (
         last(vwap)
-        if vwap and vwap[-1]['time'] == candles[-1]['time']
+        if vwap and vwap[-1]["time"] == candles[-1]["time"]
         else None
     )
 
     # --------------------------------------------------
-    # Volume
+    # VOLUME
     # --------------------------------------------------
 
-    result['volume'] = [
-        dict(
-            time=c['time'],
-            value=c.get('volume', 0),
-            color=(
-                '#00b89580'
-                if c['close'] >= c['open']
-                else '#ff456680'
-            )
-        )
-        for c in candles
-    ] if volume_supported else []
-
-    ind['volume'] = (
-        candles[-1].get('volume', 0)
-        if volume_supported and candles
-        else None
-    )
-
-    result['volume_supported'] = volume_supported
-
-    result['vwap_note'] = (
-        'Actual futures session VWAP (typical price × volume)'
-        if volume_supported and full['timeframe'] not in ('1D', 'W')
-        else 'Session VWAP unavailable on daily/weekly bars'
+    result["volume"] = (
+        [
+            {
+                "time": c["time"],
+                "value": volumes[i],
+                "color": (
+                    "#00b89580"
+                    if c["close"] >= c["open"]
+                    else "#ff456680"
+                )
+            }
+            for i, c in enumerate(candles)
+        ]
         if volume_supported
-        else 'NIFTY spot index has no traded volume; switch to NIFTY futures for VWAP/volume'
+        else []
     )
 
-    result['indicator_method'] = (
-        'EMA seeded from first history close; '
-        'MA8 simple moving average; '
-        'WMA8 weighted moving average; '
-        'RSI/ATR Wilder smoothing; '
-        'MACD 12/26/9; '
-        'Bollinger20 ±2 population SD. '
-        'Values include latest provider candle, which may be forming.'
+    ind["volume"] = (
+        volumes[-1]
+        if volume_supported and volumes
+        else None
     )
 
-    result['indicators'] = ind
+    # --------------------------------------------------
+    # MFI 14 - MONEY FLOW INDEX
+    #
+    # Typical Price = (High + Low + Close) / 3
+    # Raw Money Flow = Typical Price × Actual Volume
+    # --------------------------------------------------
+
+    mfi_values = [None] * n
+
+    if has_volume_data and n > 14:
+
+        typical_prices = [
+            (
+                c["high"] + c["low"] + c["close"]
+            ) / 3
+            for c in candles
+        ]
+
+        positive_flow = [0.0] * n
+        negative_flow = [0.0] * n
+
+        for i in range(1, n):
+            raw_money_flow = (
+                typical_prices[i] * volumes[i]
+            )
+
+            if typical_prices[i] > typical_prices[i - 1]:
+                positive_flow[i] = raw_money_flow
+
+            elif typical_prices[i] < typical_prices[i - 1]:
+                negative_flow[i] = raw_money_flow
+
+        for i in range(14, n):
+
+            start = i - 14 + 1
+
+            positive_sum = sum(
+                positive_flow[start:i + 1]
+            )
+
+            negative_sum = sum(
+                negative_flow[start:i + 1]
+            )
+
+            if positive_sum == 0 and negative_sum == 0:
+                mfi_values[i] = 50.0
+
+            elif negative_sum == 0:
+                mfi_values[i] = 100.0
+
+            elif positive_sum == 0:
+                mfi_values[i] = 0.0
+
+            else:
+                money_ratio = (
+                    positive_sum / negative_sum
+                )
+
+                mfi_values[i] = (
+                    100 - 100 / (1 + money_ratio)
+                )
+
+    result["mfi14"] = series(mfi_values)
+    ind["mfi14"] = last(result["mfi14"])
+
+    # --------------------------------------------------
+    # PVT - PRICE VOLUME TREND
+    #
+    # PVT = Previous PVT +
+    #       ((Close - Previous Close) / Previous Close)
+    #       × Actual Volume
+    #
+    # Initial baseline is zero.
+    # --------------------------------------------------
+
+    pvt_values = [None] * n
+
+    if has_volume_data and n:
+
+        running_pvt = 0.0
+        pvt_values[0] = 0.0
+
+        for i in range(1, n):
+
+            previous_close = closes[i - 1]
+
+            if previous_close <= 0:
+                pvt_values[i] = None
+                continue
+
+            price_change_ratio = (
+                closes[i] - previous_close
+            ) / previous_close
+
+            running_pvt += (
+                price_change_ratio * volumes[i]
+            )
+
+            pvt_values[i] = running_pvt
+
+    result["pvt"] = series(pvt_values)
+    ind["pvt"] = last(result["pvt"])
+
+    # --------------------------------------------------
+    # DATA AVAILABILITY
+    # --------------------------------------------------
+
+    result["volume_supported"] = volume_supported
+    result["volume_data_available"] = has_volume_data
+
+    if not volume_supported:
+        volume_note = (
+            "This instrument has no traded volume. "
+            "Select a futures contract for Volume, VWAP, MFI and PVT."
+        )
+
+    elif not has_volume_data:
+        volume_note = (
+            "Kite supports traded volume for this instrument, "
+            "but positive volume data is not present in these candles."
+        )
+
+    else:
+        volume_note = (
+            "Actual Kite futures traded volume is being used."
+        )
+
+    result["vwap_note"] = (
+        "Actual session VWAP (typical price × traded volume)"
+        if has_volume_data and full["timeframe"] not in ("1D", "W")
+        else "Session VWAP is unavailable on daily/weekly bars."
+        if has_volume_data
+        else volume_note
+    )
+
+    result["mfi_note"] = (
+        "MFI 14 calculated from actual traded volume."
+        if has_volume_data
+        else volume_note
+    )
+
+    result["pvt_note"] = (
+        "PVT calculated from actual traded volume."
+        if has_volume_data
+        else volume_note
+    )
+
+    result["indicator_method"] = (
+        "EMA seeded from first history close; "
+        "MA8 simple moving average; "
+        "WMA8 weighted moving average; "
+        "RSI/ATR Wilder smoothing; "
+        "MACD 12/26/9; "
+        "Bollinger20 ±2 population SD; "
+        "VWAP uses session typical price × actual volume; "
+        "MFI uses 14-period positive/negative money flow; "
+        "PVT uses close-to-close percentage change × actual volume. "
+        "Values include latest provider candle, which may be forming."
+    )
+
+    result["indicators"] = ind
 
     return result

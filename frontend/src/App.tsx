@@ -116,7 +116,7 @@ function PanelTitle({
 export default function App() {
   const [active, setActive] = useState("Dashboard");
   const [search, setSearch] = useState("");
-  const [timeframe, setTimeframe] = useState("5m");
+  const [timeframe, setTimeframe] = useState("15m");
 
   // Selected option-chain market.
   const [selectedMarket, setSelectedMarket] = useState("NIFTY");
