@@ -121,6 +121,10 @@ export default function App() {
   // Selected option-chain market.
   const [selectedMarket, setSelectedMarket] = useState("NIFTY");
 
+  // Selected option contract for the candle chart.
+  const [selectedStrike, setSelectedStrike] = useState<number | null>(null);
+  const [optionType, setOptionType] = useState<"CE" | "PE">("CE");
+
   const [tradeMode, setTradeMode] = useState("Manual");
   const [auto, setAuto] = useState(false);
   const [alerts, setAlerts] = useState(true);
@@ -150,6 +154,36 @@ export default function App() {
   >({});
   const [scannerSector, setScannerSector] = useState("All Sectors");
   const [scannerSort, setScannerSort] = useState("Strongest");
+
+  // Automatically select the current ATM strike when option-chain data arrives.
+  useEffect(() => {
+    const strikes = chainData?.strikes?.map(s => s.strike) ?? [];
+
+    if (!strikes.length) {
+      setSelectedStrike(null);
+      return;
+    }
+
+    setSelectedStrike(current => {
+      if (current !== null && strikes.includes(current)) {
+        return current;
+      }
+
+      const atm = chainData?.atm_strike;
+
+      if (atm != null && strikes.includes(atm)) {
+        return atm;
+      }
+
+      const target = atm ?? strikes[0];
+
+      return strikes.reduce((closest, strike) =>
+        Math.abs(strike - target) < Math.abs(closest - target)
+          ? strike
+          : closest
+      );
+    });
+  }, [chainData?.atm_strike, chainData?.strikes]);
 
   // Fetch live stock quotes.
   useEffect(() => {
@@ -297,6 +331,8 @@ export default function App() {
 
     setSelectedMarket(symbol);
     setSelectedExpiry("");
+    setSelectedStrike(null);
+    setOptionType("CE");
     setChainData(null);
     setChainError("");
     setLiveOi(null);
@@ -315,7 +351,6 @@ export default function App() {
   }, []);
 
   // Receive chart indicators from IndicatorCandleChart.
-  // useCallback keeps these functions stable and prevents unnecessary chart reloads.
   const handleIndicatorsUpdate = useCallback(
     (indicators: ChartStats | null) => {
       setChartIndicators(indicators);
@@ -842,6 +877,13 @@ export default function App() {
           <IndicatorCandleChart
             symbol={selectedMarket}
             timeframe={timeframe}
+            expiry={selectedExpiry || chainData?.selected_expiry || ""}
+            atmStrike={chainData?.atm_strike ?? null}
+            availableStrikes={chainData?.strikes.map(s => s.strike) ?? []}
+            selectedStrike={selectedStrike}
+            onStrikeChange={setSelectedStrike}
+            optionType={optionType}
+            onOptionTypeChange={setOptionType}
             onIndicatorsUpdate={handleIndicatorsUpdate}
             onStatusUpdate={handleStatusUpdate}
           />

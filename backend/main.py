@@ -18,6 +18,7 @@ import requests
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from .services.option_chart_service import get_option_chart_data
 from pydantic import BaseModel
 
 
@@ -548,7 +549,29 @@ def chart_candles(
 
     return data
 
+# ---------------------------------------------------------
+# SELECTED OPTION CONTRACT CHART
+# ---------------------------------------------------------
 
+@app.get("/api/chart/option-candles")
+def option_chart_candles(
+    symbol: str = Query("NIFTY"),
+    expiry: str = Query(...),
+    strike: float = Query(..., gt=0),
+    option_type: str = Query("CE"),
+    timeframe: str = Query("15m"),
+    count: int = Query(1000, ge=20, le=1000),
+    session: bool = Query(True)
+):
+    return get_option_chart_data(
+        symbol=symbol,
+        expiry=expiry,
+        strike=strike,
+        option_type=option_type,
+        timeframe=timeframe,
+        count=count,
+        session=session
+    )
 # ---------------------------------------------------------
 # CHART TICK
 # ---------------------------------------------------------

@@ -43,6 +43,20 @@ interface Point {
   color?: string;
 }
 
+interface IndicatorCandleChartProps {
+  symbol?: string;
+  timeframe: string;
+  expiry?: string;
+  atmStrike?: number | null;
+  availableStrikes?: number[];
+  selectedStrike?: number | null;
+  onStrikeChange?: (strike: number) => void;
+  optionType?: "CE" | "PE";
+  onOptionTypeChange?: (type: "CE" | "PE") => void;
+  onIndicatorsUpdate: (ind: ChartStats | null) => void;
+  onStatusUpdate: (message: string) => void;
+}
+
 const overlays = [
   "MA8",
   "WMA8",
@@ -58,17 +72,6 @@ const overlays = [
   "MFI",
   "PVT",
   "Volume"
-];
-
-const timeframeOptions = [
-  { label: "1 Minute", value: "1m" },
-  { label: "3 Minutes", value: "3m" },
-  { label: "5 Minutes", value: "5m" },
-  { label: "15 Minutes", value: "15m" },
-  { label: "30 Minutes", value: "30m" },
-  { label: "1 Hour", value: "1H" },
-  { label: "1 Day", value: "1D" },
-  { label: "1 Week", value: "W" }
 ];
 
 const fields: Record<string, string> = {
@@ -127,14 +130,16 @@ const normalizeTimeframe = (value: string) => {
 export default function IndicatorCandleChart({
   symbol = "NIFTY",
   timeframe,
+  expiry = "",
+  atmStrike = null,
+  availableStrikes = [],
+  selectedStrike = null,
+  onStrikeChange,
+  optionType = "CE",
+  onOptionTypeChange,
   onIndicatorsUpdate,
   onStatusUpdate
-}: {
-  symbol?: string;
-  timeframe: string;
-  onIndicatorsUpdate: (ind: ChartStats | null) => void;
-  onStatusUpdate: (message: string) => void;
-}) {
+}: IndicatorCandleChartProps) {
   const host = useRef<HTMLDivElement>(null);
   const scrollHost = useRef<HTMLDivElement>(null);
   const range = useRef<LogicalRange | null>(null);
@@ -142,11 +147,8 @@ export default function IndicatorCandleChart({
 
   const marketSymbol = symbol.toUpperCase();
 
-  // NIFTY front-month futures is the default chart instrument.
   const [instrument, setInstrument] = useState(
-    marketSymbol === "NIFTY"
-      ? "NIFTY_FUT"
-      : marketSymbol
+    marketSymbol === "NIFTY" ? "NIFTY_FUT" : marketSymbol
   );
 
   const effectiveInstrument =
@@ -154,13 +156,10 @@ export default function IndicatorCandleChart({
       ? "NIFTY_FUT"
       : marketSymbol;
 
-  // Default timeframe: 15 minutes.
   const [selectedTimeframe, setSelectedTimeframe] = useState(
     normalizeTimeframe(timeframe || "15m")
   );
 
-  // Default enabled indicators.
-  // MACD enables both MACD line and MACD signal.
   const [enabled, setEnabled] = useState([
     "MA8",
     "WMA8",
@@ -182,50 +181,67 @@ export default function IndicatorCandleChart({
   const [now, setNow] = useState(Date.now());
   const [stats, setStats] = useState<ChartStats | null>(null);
 
-  // Reset to NIFTY futures whenever NIFTY is selected.
-  // Other selected indices use their own spot instrument.
+  const panes = enabled.filter(s =>
+    ["RSI", "MACD", "ATR", "MFI", "PVT", "Volume"].includes(s)
+  ).length;
+
+  const validStrikes = availableStrikes
+    .filter((strike): strike is number =>
+      typeof strike === "number" && Number.isFinite(strike)
+    )
+    .sort((a, b) => a - b);
+
+  const chartStrike =
+    selectedStrike ??
+    (atmStrike != null && validStrikes.includes(atmStrike)
+      ? atmStrike
+      : null);
+
+  const isOptionChart = chartStrike !== null;
+
   useEffect(() => {
     setInstrument(
-      marketSymbol === "NIFTY"
-        ? "NIFTY_FUT"
-        : marketSymbol
+      marketSymbol === "NIFTY" ? "NIFTY_FUT" : marketSymbol
     );
 
     range.current = null;
   }, [marketSymbol]);
 
-  // Keep chart timeframe synchronized with App.tsx.
   useEffect(() => {
     setSelectedTimeframe(
       normalizeTimeframe(timeframe || "15m")
     );
   }, [timeframe]);
 
-  // Update quote freshness display every second.
   useEffect(() => {
-    const id = setInterval(
-      () => setNow(Date.now()),
-      1000
-    );
-
+    const id = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(id);
   }, []);
 
-  const panes = enabled.filter(s =>
-    [
-      "RSI",
-      "MACD",
-      "ATR",
-      "MFI",
-      "PVT",
-      "Volume"
-    ].includes(s)
-  ).length;
+  // Reset chart data when the selected contract changes.
+  useEffect(() => {
+    range.current = null;
+    setStats(null);
+    setFeed(null);
+    onIndicatorsUpdate(null);
+  }, [
+    marketSymbol,
+    expiry,
+    chartStrike,
+    optionType,
+    onIndicatorsUpdate
+  ]);
 
   useEffect(() => {
     if (!host.current || !scrollHost.current) return;
 
-    const key = `${effectiveInstrument}:${selectedTimeframe}`;
+    const key = [
+      effectiveInstrument,
+      selectedTimeframe,
+      expiry,
+      chartStrike ?? "",
+      optionType
+    ].join(":");
 
     if (chartKey.current !== key) {
       range.current = null;
@@ -245,12 +261,8 @@ export default function IndicatorCandleChart({
       },
 
       grid: {
-        vertLines: {
-          color: "#12283a"
-        },
-        horzLines: {
-          color: "#12283a"
-        }
+        vertLines: { color: "#12283a" },
+        horzLines: { color: "#12283a" }
       },
 
       rightPriceScale: {
@@ -277,9 +289,7 @@ export default function IndicatorCandleChart({
         timeFormatter: (t: Time) =>
           new Date(Number(t) * 1000).toLocaleString(
             "en-IN",
-            {
-              timeZone: "Asia/Kolkata"
-            }
+            { timeZone: "Asia/Kolkata" }
           )
       }
     });
@@ -315,24 +325,17 @@ export default function IndicatorCandleChart({
       );
 
       lines[key] = series;
-
       return series;
     };
 
-    // --------------------------------------------------
-    // MA8 AND WMA8
-    // --------------------------------------------------
-
+    // MA8 and WMA8.
     for (const name of ["MA8", "WMA8"]) {
       if (enabled.includes(name)) {
         addLine(fields[name]);
       }
     }
 
-    // --------------------------------------------------
-    // EMA AND VWAP OVERLAYS
-    // --------------------------------------------------
-
+    // EMA and VWAP overlays.
     for (const name of [
       "EMA9",
       "EMA21",
@@ -345,10 +348,7 @@ export default function IndicatorCandleChart({
       }
     }
 
-    // --------------------------------------------------
-    // BOLLINGER BANDS
-    // --------------------------------------------------
-
+    // Bollinger bands.
     if (enabled.includes("Bollinger")) {
       for (const key of [
         "bb_upper",
@@ -361,10 +361,7 @@ export default function IndicatorCandleChart({
 
     let pane = 1;
 
-    // --------------------------------------------------
-    // RSI PANE
-    // --------------------------------------------------
-
+    // RSI.
     if (enabled.includes("RSI")) {
       const rsi = addLine("rsi14", pane++);
 
@@ -389,10 +386,7 @@ export default function IndicatorCandleChart({
       });
     }
 
-    // --------------------------------------------------
-    // MACD PANE
-    // --------------------------------------------------
-
+    // MACD.
     let macdHistogram: ISeriesApi<"Histogram"> | undefined;
 
     if (enabled.includes("MACD")) {
@@ -409,18 +403,12 @@ export default function IndicatorCandleChart({
       );
     }
 
-    // --------------------------------------------------
-    // ATR PANE
-    // --------------------------------------------------
-
+    // ATR.
     if (enabled.includes("ATR")) {
       addLine("atr14", pane++);
     }
 
-    // --------------------------------------------------
-    // MFI PANE
-    // --------------------------------------------------
-
+    // MFI.
     if (enabled.includes("MFI")) {
       const mfi = addLine("mfi14", pane++);
 
@@ -445,26 +433,18 @@ export default function IndicatorCandleChart({
       });
     }
 
-    // --------------------------------------------------
-    // PVT PANE
-    // --------------------------------------------------
-
+    // PVT.
     if (enabled.includes("PVT")) {
       addLine("pvt", pane++);
     }
 
-    // --------------------------------------------------
-    // VOLUME PANE
-    // --------------------------------------------------
-
+    // Volume.
     const volume = enabled.includes("Volume")
       ? chart.addSeries(
         HistogramSeries,
         {
           title: "Volume",
-          priceFormat: {
-            type: "volume"
-          },
+          priceFormat: { type: "volume" },
           priceLineVisible: false,
           lastValueVisible: true
         },
@@ -491,13 +471,16 @@ export default function IndicatorCandleChart({
     setFeed(null);
     onIndicatorsUpdate(null);
 
+    const contractLabel = isOptionChart
+      ? `${marketSymbol} ${expiry} ${chartStrike} ${optionType}`
+      : effectiveInstrument;
+
     onStatusUpdate(
-      `Loading ${effectiveInstrument} Kite candles and indicators…`
+      `Loading ${contractLabel} Kite candles and indicators…`
     );
 
     const load = async () => {
       controller = new AbortController();
-
       const currentController = controller;
 
       const timeout = setTimeout(
@@ -507,17 +490,26 @@ export default function IndicatorCandleChart({
 
       try {
         const params = new URLSearchParams({
-          symbol: effectiveInstrument,
+          symbol: isOptionChart ? marketSymbol : effectiveInstrument,
           timeframe: selectedTimeframe,
           count: "1000",
           session: "true"
         });
 
+        // Send the selected option contract to the backend.
+        if (isOptionChart) {
+          if (!expiry) {
+            throw new Error("Select an option expiry first.");
+          }
+
+          params.set("expiry", expiry);
+          params.set("strike", String(chartStrike));
+          params.set("option_type", optionType);
+        }
+
         const response = await fetch(
           apiUrl(`/api/chart/candles?${params.toString()}`),
-          {
-            signal: currentController.signal
-          }
+          { signal: currentController.signal }
         );
 
         const data = await response.json();
@@ -535,19 +527,18 @@ export default function IndicatorCandleChart({
           !Array.isArray(data.candles) ||
           data.candles.length === 0
         ) {
-          throw new Error(
-            "Actual Kite candles required"
-          );
+          throw new Error("Actual Kite candles required");
         }
 
-        // Validate canonical symbol rather than display label.
         if (
           data.symbol &&
           String(data.symbol).toUpperCase() !==
-          effectiveInstrument.toUpperCase()
+          (isOptionChart
+            ? marketSymbol
+            : effectiveInstrument).toUpperCase()
         ) {
           throw new Error(
-            `Received ${data.symbol} data while ${effectiveInstrument} is selected.`
+            `Received ${data.symbol} data while ${contractLabel} is selected.`
           );
         }
 
@@ -561,21 +552,18 @@ export default function IndicatorCandleChart({
           closed: !!data.last_candle_closed
         });
 
-        // Live LTP price line.
+        // Live Kite LTP line.
         if (typeof data.indicators?.ltp === "number") {
           const options = {
             price: data.indicators.ltp,
-
             title:
               data.quote_status === "fresh"
                 ? "Kite LTP"
                 : "STALE / UNVERIFIED LTP",
-
             color:
               data.quote_status === "fresh"
                 ? "#00d6a3"
                 : "#8fa1b2",
-
             axisLabelVisible: true
           };
 
@@ -616,7 +604,7 @@ export default function IndicatorCandleChart({
             : bars
         );
 
-        // Update all indicator lines.
+        // Indicator lines.
         for (const [lineKey, series] of Object.entries(lines)) {
           series.setData(
             withSession(data[lineKey] || [])
@@ -626,15 +614,10 @@ export default function IndicatorCandleChart({
         // MACD histogram.
         macdHistogram?.setData(
           withSession(
-            (data.macd_histogram || []).map(
-              (p: Point) => ({
-                ...p,
-                color:
-                  p.value >= 0
-                    ? "#00b895"
-                    : "#ff4566"
-              })
-            )
+            (data.macd_histogram || []).map((p: Point) => ({
+              ...p,
+              color: p.value >= 0 ? "#00b895" : "#ff4566"
+            }))
           )
         );
 
@@ -658,9 +641,7 @@ export default function IndicatorCandleChart({
 
         if (!loaded) {
           if (range.current) {
-            chart.timeScale().setVisibleLogicalRange(
-              range.current
-            );
+            chart.timeScale().setVisibleLogicalRange(range.current);
           } else {
             scroll.showWindow(
               data.session
@@ -707,9 +688,7 @@ export default function IndicatorCandleChart({
           onIndicatorsUpdate(null);
 
           onStatusUpdate(
-            `UNAVAILABLE / STALE · ${e instanceof Error
-              ? e.message
-              : "Chart failed"
+            `UNAVAILABLE / STALE · ${e instanceof Error ? e.message : "Chart failed"
             }`
           );
         }
@@ -741,6 +720,11 @@ export default function IndicatorCandleChart({
     selectedTimeframe,
     effectiveInstrument,
     enabled,
+    expiry,
+    chartStrike,
+    optionType,
+    marketSymbol,
+    isOptionChart,
     onIndicatorsUpdate,
     onStatusUpdate
   ]);
@@ -759,7 +743,7 @@ export default function IndicatorCandleChart({
     <>
       <div className="candle-indicator-controls">
 
-        {/* Instrument selector */}
+        {/* Instrument selector remains unchanged. */}
         <select
           aria-label="Chart instrument"
           value={effectiveInstrument}
@@ -779,26 +763,49 @@ export default function IndicatorCandleChart({
           )}
         </select>
 
-        {/* Timeframe selector */}
+        {/* Strike selector replaces the timeframe dropdown. */}
         <select
-          aria-label="Chart timeframe"
-          value={selectedTimeframe}
+          aria-label="Option strike price"
+          value={chartStrike ?? ""}
           onChange={e => {
-            range.current = null;
-            setSelectedTimeframe(e.target.value);
+            const value = Number(e.target.value);
+
+            if (Number.isFinite(value) && onStrikeChange) {
+              range.current = null;
+              onStrikeChange(value);
+            }
           }}
+          disabled={!validStrikes.length || !onStrikeChange}
         >
-          {timeframeOptions.map(option => (
-            <option
-              key={option.value}
-              value={option.value}
-            >
-              {option.label}
+          {validStrikes.length ? (
+            validStrikes.map(strike => (
+              <option key={strike} value={strike}>
+                {strike}
+                {strike === atmStrike ? " · ATM" : ""}
+              </option>
+            ))
+          ) : (
+            <option value="">
+              Waiting for strikes…
             </option>
-          ))}
+          )}
         </select>
 
-        {/* Indicator visibility */}
+        {/* Option type selector. */}
+        <select
+          aria-label="Option type"
+          value={optionType}
+          onChange={e => {
+            onOptionTypeChange?.(
+              e.target.value as "CE" | "PE"
+            );
+          }}
+        >
+          <option value="CE">CE</option>
+          <option value="PE">PE</option>
+        </select>
+
+        {/* Indicator visibility. */}
         <details>
           <summary>Indicators</summary>
 
@@ -839,34 +846,26 @@ export default function IndicatorCandleChart({
         </details>
       </div>
 
-      {/* Kite feed status */}
+      {/* Kite feed status. */}
       <div
         className="oi-caption"
         role="status"
         style={{
-          color: isFresh
-            ? "#00d6a3"
-            : "#ffbb55"
+          color: isFresh ? "#00d6a3" : "#ffbb55"
         }}
       >
         {feed ? (
           <>
             KITE API · {feed.key} · {selectedTimeframe} ·{" "}
-            {isFresh
-              ? "FRESH SNAPSHOT"
-              : "STALE / UNVERIFIED"}
+            {isFresh ? "FRESH SNAPSHOT" : "STALE / UNVERIFIED"}
 
             <br />
 
             Quote:{" "}
             {feed.quoteTime
-              ? new Date(
-                feed.quoteTime * 1000
-              ).toLocaleString(
+              ? new Date(feed.quoteTime * 1000).toLocaleString(
                 "en-IN",
-                {
-                  timeZone: "Asia/Kolkata"
-                }
+                { timeZone: "Asia/Kolkata" }
               )
               : "Timestamp missing"
             } IST · {feed.warmup} warm-up bars · Latest candle{" "}
@@ -877,7 +876,7 @@ export default function IndicatorCandleChart({
         )}
       </div>
 
-      {/* Main chart */}
+      {/* Main chart. */}
       <div
         className="indicator-candle-host"
         ref={host}
@@ -886,7 +885,7 @@ export default function IndicatorCandleChart({
         }}
       />
 
-      {/* Horizontal chart scrollbar */}
+      {/* Horizontal chart scrollbar. */}
       <div
         className="chart-horizontal-scroll"
         ref={scrollHost}
@@ -894,7 +893,7 @@ export default function IndicatorCandleChart({
         aria-label="Scroll candles and all indicator panes"
       />
 
-      {/* Indicator values */}
+      {/* Indicator values. */}
       <div className="candle-indicator-values">
         {[
           "ltp",
