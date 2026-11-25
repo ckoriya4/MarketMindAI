@@ -1,12 +1,10 @@
-
 """Actual listed option contracts and Kite quote snapshots; no simulated option values."""
 
 import math
-import sqlite3
 import time
 import logging
 
-from datetime import datetime, date, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import Lock
 
@@ -25,16 +23,37 @@ DEFAULT_SPOTS = {
     'FINNIFTY': 21450.00
 }
 
+# Actual Kite index quote instruments.
 INDEX = {
     'NIFTY': 'NSE:NIFTY 50',
     'BANKNIFTY': 'NSE:NIFTY BANK',
-    'FINNIFTY': 'NSE:NIFTY FIN SERVICE'
+    'FINNIFTY': 'NSE:NIFTY FIN SERVICE',
+    'MIDCPNIFTY': 'NSE:NIFTY MID SELECT',
+    'NIFTYNXT50': 'NSE:NIFTY NEXT 50',
+    'SENSEX': 'BSE:SENSEX',
+    'BANKEX': 'BSE:BANKEX'
+}
+
+# Exchange where each symbol's listed options are traded.
+OPTION_EXCHANGE = {
+    'NIFTY': 'NFO',
+    'BANKNIFTY': 'NFO',
+    'FINNIFTY': 'NFO',
+    'MIDCPNIFTY': 'NFO',
+    'NIFTYNXT50': 'NFO',
+    'SENSEX': 'BFO',
+    'BANKEX': 'BFO'
 }
 
 IST = timezone(timedelta(hours=5, minutes=30))
 
 _lock = Lock()
 _cache = {}
+
+# Separate daily cache for exchanges other than the shared NFO cache.
+# shared.instruments() in oi_signal.py deliberately loads NFO only.
+_instrument_cache = {}
+_instrument_cache_lock = Lock()
 
 DB = Path(__file__).resolve().parents[1] / 'data' / 'option-oi-baselines.sqlite3'
 
@@ -62,6 +81,12 @@ def expiry_label(d):
 
 
 def parse_expiry(value, values):
+    if not values:
+        raise HTTPException(
+            503,
+            'No upcoming listed option expiries returned by Kite.'
+        )
+
     if not value:
         return values[0]
 
@@ -78,28 +103,68 @@ def parse_expiry(value, values):
     )
 
 
+def exchange_instruments(kite, exchange, today):
+    """Load one exchange instrument dump per day."""
+
+    if exchange == 'NFO':
+        # Preserve the existing shared NFO instrument cache.
+        with shared.lock:
+            return shared.instruments(kite, today)
+
+    with _instrument_cache_lock:
+        cached = _instrument_cache.get(exchange)
+
+        if cached and cached['date'] == today:
+            return cached['rows']
+
+        try:
+            data = kite.instruments(exchange)
+
+            if not isinstance(data, list):
+                raise ValueError('Invalid instrument dump')
+
+            _instrument_cache[exchange] = {
+                'date': today,
+                'rows': data
+            }
+
+            return data
+
+        except Exception:
+            logging.exception(
+                'Failed to load %s instruments from Kite',
+                exchange
+            )
+            raise HTTPException(
+                503,
+                f'Cannot load actual Kite {exchange} instruments.'
+            ) from None
+
+
 def listed(kite, symbol, now):
     if symbol not in INDEX:
         raise HTTPException(
             422,
-            'Supported underlyings: NIFTY, BANKNIFTY, FINNIFTY.'
+            'Supported markets: NIFTY, BANKNIFTY, FINNIFTY, '
+            'MIDCPNIFTY, NIFTYNXT50, SENSEX, BANKEX.'
         )
 
-    # Reuse the same daily instrument dump as the OI recorder.
-    with shared.lock:
-        data = shared.instruments(kite, now.date())
+    exchange = OPTION_EXCHANGE[symbol]
+    data = exchange_instruments(kite, exchange, now.date())
 
     rows = [
         r for r in data
         if r.get('name') == symbol
         and r.get('instrument_type') in ('CE', 'PE')
+        and r.get('expiry')
         and shared.expiry_date(r['expiry']) >= now.date()
     ]
 
     if not rows:
         raise HTTPException(
             503,
-            'No currently listed options returned by Kite.'
+            f'No currently listed {exchange} CE/PE contracts '
+            f'returned by Kite for {symbol}.'
         )
 
     return rows
@@ -114,7 +179,7 @@ def get_upcoming_expiries(symbol='NIFTY'):
             expiry_label(d)
             for d in sorted({
                 shared.expiry_date(r['expiry'])
-                for r in listed(kite, symbol, now)
+                for r in listed(kite, symbol.upper(), now)
             })
         ]
 
@@ -122,6 +187,7 @@ def get_upcoming_expiries(symbol='NIFTY'):
         raise
 
     except Exception:
+        logging.exception('Unable to load listed option expiries')
         raise HTTPException(
             503,
             'Cannot load actual listed expiries from Kite.'
@@ -141,27 +207,12 @@ def quote_time(q):
 # ---------------------------------------------------------
 
 def save_option_chain_history(symbol, expiry, rows, raw, baseline):
-    """
-    Save actual Kite CE/PE quote snapshots to PostgreSQL.
-
-    Saves:
-    - Symbol
-    - Expiry
-    - Strike
-    - CE / PE
-    - LTP
-    - OI
-    - OI change
-    - Volume
-    - Actual quote timestamp
-
-    Missing values are not generated.
-    """
+    """Save actual Kite CE/PE quote snapshots to PostgreSQL."""
 
     records = []
+    exchange = OPTION_EXCHANGE[symbol]
 
     for r in rows:
-
         if shared.expiry_date(r['expiry']) != expiry:
             continue
 
@@ -171,7 +222,8 @@ def save_option_chain_history(symbol, expiry, rows, raw, baseline):
         if option_type not in ('CE', 'PE'):
             continue
 
-        key = 'NFO:' + r['tradingsymbol']
+        contract_exchange = r.get('exchange') or exchange
+        key = contract_exchange + ':' + r['tradingsymbol']
         q = raw.get(key, {})
 
         oi = q.get('oi')
@@ -179,7 +231,7 @@ def save_option_chain_history(symbol, expiry, rows, raw, baseline):
         volume = q.get('volume')
         ts = quote_time(q)
 
-        # Save only valid actual Kite quotes.
+        # Save only records with a real provider timestamp and valid values.
         if not (
             numeric(oi)
             and oi >= 0
@@ -190,7 +242,6 @@ def save_option_chain_history(symbol, expiry, rows, raw, baseline):
             continue
 
         base = baseline.get(key)
-
         oi_change = None
 
         if base and numeric(base[0]):
@@ -221,7 +272,6 @@ def save_option_chain_history(symbol, expiry, rows, raw, baseline):
 
     try:
         with get_db_connection() as conn:
-
             conn.executemany(
                 """
                 INSERT INTO option_chain_history (
@@ -249,7 +299,6 @@ def save_option_chain_history(symbol, expiry, rows, raw, baseline):
         logging.exception(
             'Failed to save option chain history to PostgreSQL'
         )
-
         return 0
 
 
@@ -268,17 +317,15 @@ def build_chain(
     num_strikes
 ):
 
+    exchange = OPTION_EXCHANGE[symbol]
     paired = {}
 
     for r in rows:
-
         if shared.expiry_date(r['expiry']) == expiry:
-
-            paired.setdefault(
-                float(r['strike']), {}
-            )[r['instrument_type']] = (
-                'NFO:' + r['tradingsymbol']
-            )
+            contract_exchange = r.get('exchange') or exchange
+            paired.setdefault(float(r['strike']), {})[
+                r['instrument_type']
+            ] = contract_exchange + ':' + r['tradingsymbol']
 
     ladder = sorted(
         k for k, v in paired.items()
@@ -308,7 +355,6 @@ def build_chain(
     missing = []
 
     for strike in selected:
-
         item = dict(
             strike=strike,
             is_atm=strike == atm,
@@ -320,13 +366,13 @@ def build_chain(
             ('CE', 'call'),
             ('PE', 'put')
         ]:
-
             key = paired[strike][typ]
             q = raw.get(key, {})
 
             oi = q.get('oi')
             ltp = q.get('last_price')
             ts = quote_time(q)
+            volume = q.get('volume')
 
             valid = (
                 numeric(oi)
@@ -343,48 +389,39 @@ def build_chain(
                 missing.append(key)
 
             oi = int(oi) if valid else None
-
             base = baseline.get(key)
 
             change = (
                 oi - base[0]
-                if oi is not None and base
+                if oi is not None and base and numeric(base[0])
                 else None
             )
 
             pct = (
                 round(change / base[0] * 100, 2)
-                if change is not None and base[0] > 0
+                if change is not None
+                and numeric(base[0])
+                and base[0] > 0
                 else None
             )
 
             item.update({
-                prefix + '_ltp':
-                    float(ltp) if valid else None,
-
-                prefix + '_oi':
-                    oi,
-
-                prefix + '_oi_formatted':
-                    fmt(oi),
-
-                prefix + '_oi_chg':
-                    change,
-
-                prefix + '_oi_chg_formatted':
-                    fmt(change),
-
-                prefix + '_oi_pct_chg':
-                    pct,
-
-                prefix + '_quote_time':
-                    ts,
-
-                prefix + '_baseline_at':
-                    base[1] if base else None,
-
-                prefix + '_oi_baseline_status':
+                prefix + '_ltp': float(ltp) if valid else None,
+                prefix + '_oi': oi,
+                prefix + '_oi_formatted': fmt(oi),
+                prefix + '_oi_chg': change,
+                prefix + '_oi_chg_formatted': fmt(change),
+                prefix + '_oi_pct_chg': pct,
+                prefix + '_quote_time': ts,
+                prefix + '_volume': (
+                    int(volume)
+                    if numeric(volume) and volume >= 0
+                    else None
+                ),
+                prefix + '_baseline_at': base[1] if base else None,
+                prefix + '_oi_baseline_status': (
                     'ok' if base else 'loading / unavailable'
+                )
             })
 
         c = item['call_oi']
@@ -427,18 +464,15 @@ def build_chain(
     )
 
     for r in results:
-
         r['call_bar_pct'] = round(
             (r['call_oi'] or 0) / maxoi * 100,
             1
         )
-
         r['put_bar_pct'] = round(
             (r['put_oi'] or 0) / maxoi * 100,
             1
         )
 
-    # OI concentrations, constrained to displayed expiry/range.
     resistance = [
         r for r in results
         if r['strike'] >= spot
@@ -498,7 +532,6 @@ def build_chain(
         else 'stale'
     )
 
-    # Descriptive OI balance on a 0..100 scale.
     score = (
         round(100 * tp / (tp + tc))
         if fresh and tp + tc > 0
@@ -526,9 +559,7 @@ def build_chain(
                 expiry_label(shared.expiry_date(r['expiry']))
                 for r in rows
             },
-            key=lambda v: datetime.strptime(
-                v, '%d-%b-%Y'
-            )
+            key=lambda v: datetime.strptime(v, '%d-%b-%Y')
         ),
 
         days_to_expiry=(expiry - now.date()).days,
@@ -549,7 +580,6 @@ def build_chain(
 
         resistance_strike=rr['strike'] if rr else None,
         resistance_oi=fmt(rr['call_oi'] if rr else None),
-
         support_strike=ss['strike'] if ss else None,
         support_oi=fmt(ss['put_oi'] if ss else None),
 
@@ -596,12 +626,18 @@ def get_dynamic_option_chain(
     num_strikes=7,
     custom_spot=None
 ):
-
     # Legacy argument intentionally ignored:
-    # live ATM must use actual index spot.
+    # live ATM must use actual Kite index spot.
 
-    symbol = symbol.upper()
+    symbol = symbol.strip().upper()
     num_strikes = int(num_strikes)
+
+    if symbol not in INDEX:
+        raise HTTPException(
+            422,
+            'Supported markets: NIFTY, BANKNIFTY, FINNIFTY, '
+            'MIDCPNIFTY, NIFTYNXT50, SENSEX, BANKEX.'
+        )
 
     if not 3 <= num_strikes <= 50:
         raise HTTPException(
@@ -610,20 +646,15 @@ def get_dynamic_option_chain(
         )
 
     with _lock:
-
         now = datetime.now(IST)
-
         cachekey = (symbol, expiry, num_strikes)
-
         cached = _cache.get(cachekey)
 
         if cached and time.monotonic() - cached[0] < 5:
             return cached[1]
 
         try:
-
             kite = shared.kite_client()
-
             rows = listed(kite, symbol, now)
 
             exp = parse_expiry(
@@ -634,9 +665,8 @@ def get_dynamic_option_chain(
                 })
             )
 
-            spotraw = kite.quote(
-                [INDEX[symbol]]
-            ).get(INDEX[symbol], {})
+            spot_key = INDEX[symbol]
+            spotraw = kite.quote([spot_key]).get(spot_key, {})
 
             spot = spotraw.get('last_price')
             spot_ts = quote_time(spotraw)
@@ -648,7 +678,7 @@ def get_dynamic_option_chain(
             ):
                 raise HTTPException(
                     503,
-                    'Live index spot/timestamp unavailable.'
+                    f'Live {symbol} index spot/timestamp unavailable from Kite.'
                 )
 
             ladder = sorted({
@@ -656,6 +686,12 @@ def get_dynamic_option_chain(
                 for r in rows
                 if shared.expiry_date(r['expiry']) == exp
             })
+
+            if not ladder:
+                raise HTTPException(
+                    503,
+                    'No strikes available for selected expiry.'
+                )
 
             atm = min(
                 ladder,
@@ -671,31 +707,32 @@ def get_dynamic_option_chain(
                 ]
             )
 
+            exchange = OPTION_EXCHANGE[symbol]
+
             keys = [
-                'NFO:' + r['tradingsymbol']
+                (r.get('exchange') or exchange) + ':' + r['tradingsymbol']
                 for r in rows
                 if shared.expiry_date(r['expiry']) == exp
                 and float(r['strike']) in chosen
             ]
 
-            raw = kite.quote(keys)
+            if not keys:
+                raise HTTPException(
+                    503,
+                    'No option contracts found for selected strikes.'
+                )
 
-            today_raw = {
-                k: q
-                for k, q in raw.items()
-                if quote_time(q) is not None
-                and datetime.fromtimestamp(
-                    quote_time(q), IST
-                ).date() == now.date()
-            }
+            raw = kite.quote(keys)
 
             contracts = [
                 (
-                    'NFO:' + r['tradingsymbol'],
+                    (r.get('exchange') or exchange) + ':' + r['tradingsymbol'],
                     r['instrument_token']
                 )
                 for r in rows
-                if 'NFO:' + r['tradingsymbol'] in keys
+                if shared.expiry_date(r['expiry']) == exp
+                and float(r['strike']) in chosen
+                and (r.get('exchange') or exchange) + ':' + r['tradingsymbol'] in keys
             ]
 
             baseline = previous_baselines(
@@ -714,7 +751,6 @@ def get_dynamic_option_chain(
                 num_strikes
             )
 
-            # Save actual option-chain snapshots to PostgreSQL.
             saved_count = save_option_chain_history(
                 symbol,
                 exp,
@@ -724,13 +760,11 @@ def get_dynamic_option_chain(
             )
 
             result['postgres_saved_contracts'] = saved_count
-
             result['oi_baselines_ready'] = len(baseline)
             result['oi_baselines_total'] = len(keys)
             result['spot_quote_at'] = spot_ts
 
             if not -5 <= now.timestamp() - spot_ts <= 90:
-
                 result['status'] = 'stale'
                 result['data_mode'] = 'Kite · stale index spot'
 
@@ -752,10 +786,12 @@ def get_dynamic_option_chain(
 
         except Exception:
             logging.exception(
-                'Kite option chain request failed'
+                'Kite option chain request failed for %s',
+                symbol
             )
 
             raise HTTPException(
                 503,
-                'Kite option chain unavailable. Check token, connectivity and market-data access.'
+                'Kite option chain unavailable. Check token, connectivity, '
+                'instrument listings and market-data access.'
             ) from None
