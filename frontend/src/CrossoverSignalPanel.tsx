@@ -35,7 +35,9 @@ export default function CrossoverSignalPanel({
     stocks,
     stockMetadata
 }: Props) {
+
     const result = useMemo(() => {
+
         const getChange = (row: string[]) => {
             const metadataValue = stockMetadata[row[0]]?.change_pct;
 
@@ -47,7 +49,9 @@ export default function CrossoverSignalPanel({
             }
 
             const parsed = Number(
-                String(row[2] ?? "").replace(/[%+,]/g, "").trim()
+                String(row[2] ?? "")
+                    .replace(/[%+,]/g, "")
+                    .trim()
             );
 
             return Number.isFinite(parsed) ? parsed : null;
@@ -71,8 +75,15 @@ export default function CrossoverSignalPanel({
             row => row.change < 0
         ).length;
 
-        // Top-weighted stocks
-        const leaders = ["HDFCBANK", "RELIANCE", "ICICIBANK"];
+        // --------------------------------------------------
+        // 1. TOP-WEIGHTED STOCKS
+        // --------------------------------------------------
+
+        const leaders = [
+            "HDFCBANK",
+            "RELIANCE",
+            "ICICIBANK"
+        ];
 
         const leaderRows = leaders.map(symbol =>
             validChanges.find(row =>
@@ -90,7 +101,10 @@ export default function CrossoverSignalPanel({
                     : "FAIL"
                 : "WAITING";
 
-        // Advance / Decline
+        // --------------------------------------------------
+        // 2. ADVANCE / DECLINE
+        // --------------------------------------------------
+
         const breadthStatus: FilterStatus =
             validChanges.length < 35
                 ? "WAITING"
@@ -98,13 +112,127 @@ export default function CrossoverSignalPanel({
                     ? "PASS"
                     : "FAIL";
 
-        // MFI and PVT require indicator data not currently supplied.
-        const mfi: FilterStatus = "WAITING";
-        const pvt: FilterStatus = "WAITING";
+        // --------------------------------------------------
+        // 3. MONEY FLOW INDEX
+        //
+        // Actual MFI comes from chart_indicators.py.
+        // Required range: strictly above 50 and below 70.
+        // --------------------------------------------------
 
-        // VWAP
+        const mfiValue =
+            typeof stats?.mfi14 === "number" &&
+                Number.isFinite(stats.mfi14)
+                ? stats.mfi14
+                : null;
+
+        const mfiSignal =
+            typeof stats?.mfi_signal === "string"
+                ? stats.mfi_signal.toUpperCase()
+                : null;
+
+        const mfi: FilterStatus =
+            mfiValue === null
+                ? "WAITING"
+                : mfiValue > 50 && mfiValue < 70
+                    ? "PASS"
+                    : "FAIL";
+
+        let mfiDetail = "Waiting for actual MFI data";
+
+        if (mfiValue !== null) {
+
+            let zone = "";
+
+            if (mfiValue >= 80) {
+                zone = "Overbought";
+            } else if (mfiValue >= 70) {
+                zone = "Above preferred range";
+            } else if (mfiValue <= 20) {
+                zone = "Oversold";
+            } else if (mfiValue <= 50) {
+                zone = "Below preferred range";
+            } else {
+                zone = "Inside preferred range";
+            }
+
+            mfiDetail =
+                `MFI ${mfiValue.toFixed(2)} · ${zone}`;
+
+            if (
+                mfiSignal &&
+                mfiSignal !== "UNAVAILABLE"
+            ) {
+                mfiDetail += ` · ${mfiSignal}`;
+            }
+
+            mfiDetail += " · Required: 50–70";
+        }
+
+        // --------------------------------------------------
+        // 4. PRICE VOLUME TREND
+        //
+        // Use actual PVT and backend-calculated PVT signal.
+        // Positive PVT alone is NOT treated as bullish.
+        // --------------------------------------------------
+
+        const pvtValue =
+            typeof stats?.pvt === "number" &&
+                Number.isFinite(stats.pvt)
+                ? stats.pvt
+                : null;
+
+        const pvtSignalLine =
+            typeof stats?.pvt_signal_line === "number" &&
+                Number.isFinite(stats.pvt_signal_line)
+                ? stats.pvt_signal_line
+                : null;
+
+        const pvtSignal =
+            typeof stats?.pvt_signal === "string"
+                ? stats.pvt_signal.toUpperCase()
+                : null;
+
+        const pvtHasData =
+            pvtValue !== null &&
+            pvtSignalLine !== null &&
+            pvtSignal !== null &&
+            pvtSignal !== "UNAVAILABLE";
+
+        let pvt: FilterStatus = "WAITING";
+
+        if (pvtHasData) {
+
+            if (
+                pvtSignal === "BUY" ||
+                pvtSignal === "BULLISH"
+            ) {
+                pvt = "PASS";
+            } else {
+                // SELL, BEARISH and NEUTRAL do not
+                // satisfy the required upward PVT condition.
+                pvt = "FAIL";
+            }
+        }
+
+        let pvtDetail = "Waiting for actual PVT and signal-line data";
+
+        if (pvtHasData) {
+            pvtDetail =
+                `PVT ${pvtValue!.toFixed(2)} · ` +
+                `Signal EMA9 ${pvtSignalLine!.toFixed(2)} · ` +
+                `${pvtSignal}`;
+        } else if (pvtValue !== null) {
+            pvtDetail =
+                `PVT ${pvtValue.toFixed(2)} · Waiting for signal confirmation`;
+        }
+
+        // --------------------------------------------------
+        // 5. VWAP
+        // --------------------------------------------------
+
         const vwapStatus: FilterStatus =
             typeof stats?.ltp === "number" &&
+                Number.isFinite(stats.ltp) &&
                 typeof stats?.vwap === "number" &&
                 Number.isFinite(stats.vwap)
                 ? stats.ltp > stats.vwap
@@ -112,7 +240,19 @@ export default function CrossoverSignalPanel({
                     : "FAIL"
                 : "WAITING";
 
-        // A separate 15-minute data feed is required.
+        const vwapDetail =
+            typeof stats?.ltp === "number" &&
+                typeof stats?.vwap === "number"
+                ? `Price ${stats.ltp.toFixed(2)} · VWAP ${stats.vwap.toFixed(2)}`
+                : "Waiting for actual futures price and VWAP";
+
+        // --------------------------------------------------
+        // 6. 15-MINUTE TREND
+        //
+        // Kept separate because this component currently
+        // receives only the selected chart statistics.
+        // --------------------------------------------------
+
         const trend15: FilterStatus = "WAITING";
 
         const filters: Filter[] = [
@@ -133,28 +273,29 @@ export default function CrossoverSignalPanel({
             },
             {
                 name: "Money Flow Index",
-                detail: "MFI above 50 and below 70 required",
+                detail: mfiDetail,
                 status: mfi
             },
             {
                 name: "Price Volume Trend",
-                detail: "PVT upward slope required",
+                detail: pvtDetail,
                 status: pvt
             },
             {
                 name: "VWAP",
-                detail:
-                    stats?.ltp != null && stats?.vwap != null
-                        ? `Price ${stats.ltp.toFixed(2)} · VWAP ${stats.vwap.toFixed(2)}`
-                        : "Waiting for price and VWAP",
+                detail: vwapDetail,
                 status: vwapStatus
             },
             {
                 name: "15-minute trend",
-                detail: "Waiting for separate 15-minute trend data",
+                detail: "Waiting for separate 15-minute trend confirmation",
                 status: trend15
             }
         ];
+
+        // --------------------------------------------------
+        // FILTER SCORE
+        // --------------------------------------------------
 
         const passed = filters.filter(
             filter => filter.status === "PASS"
@@ -164,12 +305,20 @@ export default function CrossoverSignalPanel({
             filter => filter.status === "WAITING"
         ).length;
 
-        // WMA 8 / MA 8 direction
+        const failed = filters.filter(
+            filter => filter.status === "FAIL"
+        ).length;
+
+        // --------------------------------------------------
+        // WMA8 / MA8 DIRECTION
+        // --------------------------------------------------
+
         const ma = stats?.ma8;
         const wma = stats?.wma8;
 
         const direction =
-            typeof ma === "number" && typeof wma === "number"
+            typeof ma === "number" &&
+                typeof wma === "number"
                 ? wma > ma
                     ? "CALL"
                     : wma < ma
@@ -177,22 +326,29 @@ export default function CrossoverSignalPanel({
                         : "WAIT"
                 : "WAIT";
 
-        // OI changes are displayed as market context.
+        // --------------------------------------------------
+        // OPEN INTEREST CONTEXT
+        // --------------------------------------------------
+
         const callOiChange = chain?.strikes.reduce(
             (sum, strike) =>
                 sum +
-                (typeof strike.call_oi_chg === "number"
-                    ? strike.call_oi_chg
-                    : 0),
+                (
+                    typeof strike.call_oi_chg === "number"
+                        ? strike.call_oi_chg
+                        : 0
+                ),
             0
         );
 
         const putOiChange = chain?.strikes.reduce(
             (sum, strike) =>
                 sum +
-                (typeof strike.put_oi_chg === "number"
-                    ? strike.put_oi_chg
-                    : 0),
+                (
+                    typeof strike.put_oi_chg === "number"
+                        ? strike.put_oi_chg
+                        : 0
+                ),
             0
         );
 
@@ -208,14 +364,25 @@ export default function CrossoverSignalPanel({
             filters,
             passed,
             waiting,
+            failed,
             direction,
             callOiChange,
             putOiChange,
             oiAvailable,
             advances,
-            declines
+            declines,
+            mfiValue,
+            mfiSignal,
+            pvtValue,
+            pvtSignal,
+            pvtSignalLine
         };
+
     }, [stats, chain, stocks, stockMetadata]);
+
+    // --------------------------------------------------
+    // OVERALL SIGNAL STRENGTH
+    // --------------------------------------------------
 
     const strength =
         result.passed >= 5
@@ -224,6 +391,9 @@ export default function CrossoverSignalPanel({
                 ? "MEDIUM"
                 : "WEAK / WAIT";
 
+    // Preserve the existing NO TRADE condition:
+    // all six filters must have data and at least
+    // three must pass.
     const signalReady =
         result.waiting === 0 &&
         result.passed >= 3 &&
@@ -240,8 +410,13 @@ export default function CrossoverSignalPanel({
                 ? "#ff4566"
                 : "#f5b82e";
 
+    // --------------------------------------------------
+    // UI
+    // --------------------------------------------------
+
     return (
         <section className="panel crossover-signal-panel">
+
             <div className="panel-title">
                 <span>
                     <i className="live-dot" />
@@ -250,6 +425,7 @@ export default function CrossoverSignalPanel({
             </div>
 
             <div className="crossover-signal-main">
+
                 <div
                     className="crossover-direction"
                     style={{
@@ -258,7 +434,11 @@ export default function CrossoverSignalPanel({
                 >
                     <small>TRADE SIGNAL</small>
 
-                    <strong style={{ color: signalColor }}>
+                    <strong
+                        style={{
+                            color: signalColor
+                        }}
+                    >
                         {signal}
                     </strong>
 
@@ -276,14 +456,17 @@ export default function CrossoverSignalPanel({
                         {result.waiting} filters waiting
                     </span>
                 </div>
+
             </div>
 
             <div className="crossover-filter-list">
+
                 {result.filters.map((filter, index) => (
                     <div
                         className="crossover-filter-row"
                         key={filter.name}
                     >
+
                         <span className="crossover-filter-number">
                             {index + 1}
                         </span>
@@ -299,11 +482,14 @@ export default function CrossoverSignalPanel({
                         >
                             {filter.status}
                         </b>
+
                     </div>
                 ))}
+
             </div>
 
             <div className="crossover-market-context">
+
                 <div>
                     <span>ADVANCES</span>
 
@@ -339,12 +525,17 @@ export default function CrossoverSignalPanel({
                             : "—"}
                     </strong>
                 </div>
+
             </div>
 
             <div className="crossover-signal-footer">
                 5–6 PASS: Very Strong · 3–4 PASS: Medium · 0–2 PASS: Weak.
                 Signal remains NO TRADE until all six filters have data.
+                {result.failed > 0
+                    ? ` · ${result.failed} filters failed.`
+                    : ""}
             </div>
+
         </section>
     );
 }
