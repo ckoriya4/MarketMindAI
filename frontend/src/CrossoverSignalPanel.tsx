@@ -17,525 +17,524 @@ interface Props {
     stocks: string[][];
     stockMetadata: Record<
         string,
-        { change_pct?: number | null; sector?: string }
+        {
+            change_pct?: number | null;
+            sector?: string;
+        }
     >;
 }
 
 type FilterStatus = "PASS" | "FAIL" | "WAITING";
 
-interface Filter {
+interface DirectionalFilter {
     name: string;
     detail: string;
-    status: FilterStatus;
+    call: FilterStatus;
+    put: FilterStatus;
 }
+
+interface DirectionResult {
+    passed: number;
+    failed: number;
+    waiting: number;
+    ready: boolean;
+}
+
+const getNumber = (value: unknown): number | null => {
+    if (value === null || value === undefined || value === "") {
+        return null;
+    }
+
+    const number = Number(value);
+    return Number.isFinite(number) ? number : null;
+};
+
+const normalizeName = (value: string): string =>
+    value.toUpperCase().replace(/[^A-Z0-9]/g, "");
+
+const findStockChange = (
+    metadata: Props["stockMetadata"],
+    stockName: string
+): number | null => {
+    const target = normalizeName(stockName);
+
+    const matchingKey = Object.keys(metadata).find(
+        (key) => normalizeName(key) === target
+    );
+
+    if (!matchingKey) return null;
+
+    return getNumber(metadata[matchingKey]?.change_pct);
+};
+
+const getStatus = (
+    condition: boolean | null
+): FilterStatus => {
+    if (condition === null) return "WAITING";
+    return condition ? "PASS" : "FAIL";
+};
+
+const calculateDirection = (
+    filters: DirectionalFilter[],
+    direction: "call" | "put"
+): DirectionResult => {
+    const statuses = filters.map((filter) => filter[direction]);
+
+    const passed = statuses.filter(
+        (status) => status === "PASS"
+    ).length;
+
+    const failed = statuses.filter(
+        (status) => status === "FAIL"
+    ).length;
+
+    const waiting = statuses.filter(
+        (status) => status === "WAITING"
+    ).length;
+
+    return {
+        passed,
+        failed,
+        waiting,
+        ready: waiting === 0 && passed >= 3,
+    };
+};
 
 export default function CrossoverSignalPanel({
     stats,
     chain,
     stocks,
-    stockMetadata
+    stockMetadata,
 }: Props) {
-
     const result = useMemo(() => {
-
-        const getChange = (row: string[]) => {
-            const metadataValue = stockMetadata[row[0]]?.change_pct;
-
-            if (
-                typeof metadataValue === "number" &&
-                Number.isFinite(metadataValue)
-            ) {
-                return metadataValue;
-            }
-
-            const parsed = Number(
-                String(row[2] ?? "")
-                    .replace(/[%+,]/g, "")
-                    .trim()
-            );
-
-            return Number.isFinite(parsed) ? parsed : null;
-        };
-
-        const validChanges = stocks
-            .map(row => ({
-                symbol: row[0],
-                change: getChange(row)
-            }))
-            .filter(
-                (row): row is { symbol: string; change: number } =>
-                    row.change !== null
-            );
-
-        const advances = validChanges.filter(
-            row => row.change > 0
-        ).length;
-
-        const declines = validChanges.filter(
-            row => row.change < 0
-        ).length;
-
-        // --------------------------------------------------
-        // 1. TOP-WEIGHTED STOCKS
-        // --------------------------------------------------
-
-        const leaders = [
+        /*
+         * 1. TOP-WEIGHTED STOCKS
+         * CALL: HDFC Bank, Reliance and ICICI Bank all positive.
+         * PUT: all three negative.
+         */
+        const topStocks = [
             "HDFCBANK",
             "RELIANCE",
-            "ICICIBANK"
+            "ICICIBANK",
         ];
 
-        const leaderRows = leaders.map(symbol =>
-            validChanges.find(row =>
-                row.symbol
-                    .toUpperCase()
-                    .replace(/[^A-Z]/g, "")
-                    .includes(symbol)
-            )
+        const topStockChanges = topStocks.map((name) =>
+            findStockChange(stockMetadata, name)
         );
 
-        const leaderStatus: FilterStatus =
-            leaderRows.every(Boolean)
-                ? leaderRows.every(row => row!.change > 0)
-                    ? "PASS"
-                    : "FAIL"
-                : "WAITING";
+        const topStocksAvailable = topStockChanges.every(
+            (value) => value !== null
+        );
 
-        // --------------------------------------------------
-        // 2. ADVANCE / DECLINE
-        // --------------------------------------------------
+        const allTopStocksPositive = topStocksAvailable
+            ? topStockChanges.every((value) => value! > 0)
+            : null;
 
-        const breadthStatus: FilterStatus =
-            validChanges.length < 35
-                ? "WAITING"
-                : advances >= 35
-                    ? "PASS"
-                    : "FAIL";
+        const allTopStocksNegative = topStocksAvailable
+            ? topStockChanges.every((value) => value! < 0)
+            : null;
 
-        // --------------------------------------------------
-        // 3. MONEY FLOW INDEX
-        //
-        // Actual MFI comes from chart_indicators.py.
-        // Required range: strictly above 50 and below 70.
-        // --------------------------------------------------
+        /*
+         * 2. ADVANCE / DECLINE
+         * CALL: advances >= 35.
+         * PUT: declines >= 35.
+         */
+        const stockNames = [
+            ...new Set(
+                (stocks || [])
+                    .flat()
+                    .filter(
+                        (name): name is string =>
+                            typeof name === "string" &&
+                            name.trim().length > 0
+                    )
+            ),
+        ];
 
-        const mfiValue =
-            typeof stats?.mfi14 === "number" &&
-                Number.isFinite(stats.mfi14)
-                ? stats.mfi14
-                : null;
+        const stockChanges = stockNames
+            .map((name) => findStockChange(stockMetadata, name))
+            .filter(
+                (value): value is number => value !== null
+            );
 
-        const mfiSignal =
-            typeof stats?.mfi_signal === "string"
-                ? stats.mfi_signal.toUpperCase()
-                : null;
+        const advances = stockChanges.filter(
+            (value) => value > 0
+        ).length;
 
-        const mfi: FilterStatus =
-            mfiValue === null
-                ? "WAITING"
-                : mfiValue > 50 && mfiValue < 70
-                    ? "PASS"
-                    : "FAIL";
+        const declines = stockChanges.filter(
+            (value) => value < 0
+        ).length;
 
-        let mfiDetail = "Waiting for actual MFI data";
+        const breadthAvailable = stockChanges.length > 0;
 
-        if (mfiValue !== null) {
+        const advanceCondition = breadthAvailable
+            ? advances >= 35
+            : null;
 
-            let zone = "";
+        const declineCondition = breadthAvailable
+            ? declines >= 35
+            : null;
 
-            if (mfiValue >= 80) {
-                zone = "Overbought";
-            } else if (mfiValue >= 70) {
-                zone = "Above preferred range";
-            } else if (mfiValue <= 20) {
-                zone = "Oversold";
-            } else if (mfiValue <= 50) {
-                zone = "Below preferred range";
-            } else {
-                zone = "Inside preferred range";
-            }
+        /*
+         * 3. MFI
+         * CALL: strictly above 50 and below 70.
+         * PUT: strictly above 30 and below 50.
+         */
+        const mfi = getNumber(stats?.mfi14);
 
-            mfiDetail =
-                `MFI ${mfiValue.toFixed(2)} · ${zone}`;
+        const callMfiCondition =
+            mfi === null ? null : mfi > 50 && mfi < 70;
 
-            if (
-                mfiSignal &&
-                mfiSignal !== "UNAVAILABLE"
-            ) {
-                mfiDetail += ` · ${mfiSignal}`;
-            }
+        const putMfiCondition =
+            mfi === null ? null : mfi > 30 && mfi < 50;
 
-            mfiDetail += " · Required: 50–70";
-        }
+        /*
+         * 4. PVT CROSSOVER
+         * CALL: previous PVT <= previous EMA9 and current PVT > current EMA9.
+         * PUT: previous PVT >= previous EMA9 and current PVT < current EMA9.
+         *
+         * Requires previous values from the chart API.
+         */
+        const pvt = getNumber(stats?.pvt);
+        const pvtSignalLine = getNumber(stats?.pvt_signal_line);
 
-        // --------------------------------------------------
-        // 4. PRICE VOLUME TREND
-        //
-        // Use actual PVT and backend-calculated PVT signal.
-        // Positive PVT alone is NOT treated as bullish.
-        // --------------------------------------------------
+        const previousPvt = getNumber(stats?.pvt_previous);
+        const previousPvtSignalLine = getNumber(
+            stats?.pvt_signal_line_previous
+        );
 
-        const pvtValue =
-            typeof stats?.pvt === "number" &&
-                Number.isFinite(stats.pvt)
-                ? stats.pvt
-                : null;
-
-        const pvtSignalLine =
-            typeof stats?.pvt_signal_line === "number" &&
-                Number.isFinite(stats.pvt_signal_line)
-                ? stats.pvt_signal_line
-                : null;
-
-        const pvtSignal =
-            typeof stats?.pvt_signal === "string"
-                ? stats.pvt_signal.toUpperCase()
-                : null;
-
-        const pvtHasData =
-            pvtValue !== null &&
+        const pvtValuesAvailable =
+            pvt !== null &&
             pvtSignalLine !== null &&
-            pvtSignal !== null &&
-            pvtSignal !== "UNAVAILABLE";
+            previousPvt !== null &&
+            previousPvtSignalLine !== null;
 
-        let pvt: FilterStatus = "WAITING";
+        const callPvtCondition = pvtValuesAvailable
+            ? previousPvt! <= previousPvtSignalLine! &&
+            pvt! > pvtSignalLine!
+            : null;
 
-        if (pvtHasData) {
+        const putPvtCondition = pvtValuesAvailable
+            ? previousPvt! >= previousPvtSignalLine! &&
+            pvt! < pvtSignalLine!
+            : null;
 
-            if (
-                pvtSignal === "BUY" ||
-                pvtSignal === "BULLISH"
-            ) {
-                pvt = "PASS";
-            } else {
-                // SELL, BEARISH and NEUTRAL do not
-                // satisfy the required upward PVT condition.
-                pvt = "FAIL";
-            }
-        }
+        /*
+         * 5. VWAP
+         * CALL: selected contract price above VWAP.
+         * PUT: selected contract price below VWAP.
+         */
+        const ltp = getNumber(stats?.ltp);
+        const vwap = getNumber(stats?.vwap);
 
-        let pvtDetail = "Waiting for actual PVT and signal-line data";
+        const vwapAvailable = ltp !== null && vwap !== null;
 
-        if (pvtHasData) {
-            pvtDetail =
-                `PVT ${pvtValue!.toFixed(2)} · ` +
-                `Signal EMA9 ${pvtSignalLine!.toFixed(2)} · ` +
-                `${pvtSignal}`;
-        } else if (pvtValue !== null) {
-            pvtDetail =
-                `PVT ${pvtValue.toFixed(2)} · Waiting for signal confirmation`;
-        }
+        const callVwapCondition = vwapAvailable
+            ? ltp! > vwap!
+            : null;
 
-        // --------------------------------------------------
-        // 5. VWAP
-        // --------------------------------------------------
+        const putVwapCondition = vwapAvailable
+            ? ltp! < vwap!
+            : null;
 
-        const vwapStatus: FilterStatus =
-            typeof stats?.ltp === "number" &&
-                Number.isFinite(stats.ltp) &&
-                typeof stats?.vwap === "number" &&
-                Number.isFinite(stats.vwap)
-                ? stats.ltp > stats.vwap
-                    ? "PASS"
-                    : "FAIL"
-                : "WAITING";
+        /*
+         * 6. 15-MINUTE TREND
+         * CALL: 15m EMA9 above EMA21.
+         * PUT: 15m EMA9 below EMA21.
+         */
+        const trend15Ema9 = getNumber(stats?.trend15_ema9);
+        const trend15Ema21 = getNumber(stats?.trend15_ema21);
 
-        const vwapDetail =
-            typeof stats?.ltp === "number" &&
-                typeof stats?.vwap === "number"
-                ? `Price ${stats.ltp.toFixed(2)} · VWAP ${stats.vwap.toFixed(2)}`
-                : "Waiting for actual futures price and VWAP";
+        const trend15Available =
+            trend15Ema9 !== null && trend15Ema21 !== null;
 
-        // --------------------------------------------------
-        // 6. 15-MINUTE TREND
-        //
-        // Kept separate because this component currently
-        // receives only the selected chart statistics.
-        // --------------------------------------------------
+        const callTrendCondition = trend15Available
+            ? trend15Ema9! > trend15Ema21!
+            : null;
 
-        const trend15: FilterStatus = "WAITING";
+        const putTrendCondition = trend15Available
+            ? trend15Ema9! < trend15Ema21!
+            : null;
 
-        const filters: Filter[] = [
+        const filters: DirectionalFilter[] = [
             {
                 name: "Top-weighted stocks",
                 detail:
-                    leaderStatus === "WAITING"
-                        ? "Waiting for HDFC Bank, Reliance and ICICI Bank quotes"
-                        : leaderStatus === "PASS"
-                            ? "HDFC Bank, Reliance and ICICI Bank are positive"
-                            : "One or more of the three leading stocks are negative",
-                status: leaderStatus
+                    "HDFC Bank, Reliance and ICICI Bank must all be positive for CALL or all negative for PUT.",
+                call: getStatus(allTopStocksPositive),
+                put: getStatus(allTopStocksNegative),
             },
             {
                 name: "Advance / Decline",
-                detail: `${advances} advances · ${declines} declines`,
-                status: breadthStatus
+                detail:
+                    "At least 35 advances for CALL or at least 35 declines for PUT.",
+                call: getStatus(advanceCondition),
+                put: getStatus(declineCondition),
             },
             {
-                name: "Money Flow Index",
-                detail: mfiDetail,
-                status: mfi
+                name: "MFI",
+                detail:
+                    "CALL: MFI above 50 and below 70. PUT: MFI above 30 and below 50.",
+                call: getStatus(callMfiCondition),
+                put: getStatus(putMfiCondition),
             },
             {
-                name: "Price Volume Trend",
-                detail: pvtDetail,
-                status: pvt
+                name: "PVT",
+                detail:
+                    "CALL: PVT crosses above EMA9. PUT: PVT crosses below EMA9.",
+                call: getStatus(callPvtCondition),
+                put: getStatus(putPvtCondition),
             },
             {
                 name: "VWAP",
-                detail: vwapDetail,
-                status: vwapStatus
+                detail:
+                    "CALL: selected contract price above VWAP. PUT: selected contract price below VWAP.",
+                call: getStatus(callVwapCondition),
+                put: getStatus(putVwapCondition),
             },
             {
                 name: "15-minute trend",
-                detail: "Waiting for separate 15-minute trend confirmation",
-                status: trend15
-            }
+                detail:
+                    "CALL: EMA9 above EMA21. PUT: EMA9 below EMA21.",
+                call: getStatus(callTrendCondition),
+                put: getStatus(putTrendCondition),
+            },
         ];
 
-        // --------------------------------------------------
-        // FILTER SCORE
-        // --------------------------------------------------
+        const call = calculateDirection(filters, "call");
+        const put = calculateDirection(filters, "put");
 
-        const passed = filters.filter(
-            filter => filter.status === "PASS"
-        ).length;
+        /*
+         * Final signal:
+         * Only one direction must qualify.
+         * Both qualifying or neither qualifying = HOLD.
+         */
+        let signal: "CALL BUY" | "PUT BUY" | "HOLD" = "HOLD";
 
-        const waiting = filters.filter(
-            filter => filter.status === "WAITING"
-        ).length;
+        if (call.ready && !put.ready) {
+            signal = "CALL BUY";
+        } else if (put.ready && !call.ready) {
+            signal = "PUT BUY";
+        }
 
-        const failed = filters.filter(
-            filter => filter.status === "FAIL"
-        ).length;
+        /*
+         * OI context
+         */
+        const strikes = chain?.strikes || [];
 
-        // --------------------------------------------------
-        // WMA8 / MA8 DIRECTION
-        // --------------------------------------------------
-
-        const ma = stats?.ma8;
-        const wma = stats?.wma8;
-
-        const direction =
-            typeof ma === "number" &&
-                typeof wma === "number"
-                ? wma > ma
-                    ? "CALL"
-                    : wma < ma
-                        ? "PUT"
-                        : "WAIT"
-                : "WAIT";
-
-        // --------------------------------------------------
-        // OPEN INTEREST CONTEXT
-        // --------------------------------------------------
-
-        const callOiChange = chain?.strikes.reduce(
-            (sum, strike) =>
-                sum +
-                (
-                    typeof strike.call_oi_chg === "number"
-                        ? strike.call_oi_chg
-                        : 0
-                ),
+        const callOiChange = strikes.reduce(
+            (total, item) =>
+                total + (getNumber(item.call_oi_chg) ?? 0),
             0
         );
 
-        const putOiChange = chain?.strikes.reduce(
-            (sum, strike) =>
-                sum +
-                (
-                    typeof strike.put_oi_chg === "number"
-                        ? strike.put_oi_chg
-                        : 0
-                ),
+        const putOiChange = strikes.reduce(
+            (total, item) =>
+                total + (getNumber(item.put_oi_chg) ?? 0),
             0
         );
 
-        const oiAvailable = Boolean(
-            chain?.strikes.some(
-                strike =>
-                    strike.call_oi_chg !== null ||
-                    strike.put_oi_chg !== null
-            )
-        );
+        const aggregateStatus = (
+            filter: DirectionalFilter
+        ): FilterStatus => {
+            if (
+                filter.call === "PASS" ||
+                filter.put === "PASS"
+            ) {
+                return "PASS";
+            }
+
+            if (
+                filter.call === "WAITING" ||
+                filter.put === "WAITING"
+            ) {
+                return "WAITING";
+            }
+
+            return "FAIL";
+        };
+
+        const activeDirection =
+            signal === "CALL BUY"
+                ? call
+                : signal === "PUT BUY"
+                    ? put
+                    : null;
+
+        const score = activeDirection
+            ? activeDirection.passed
+            : Math.max(call.passed, put.passed);
 
         return {
             filters,
-            passed,
-            waiting,
-            failed,
-            direction,
-            callOiChange,
-            putOiChange,
-            oiAvailable,
+            call,
+            put,
+            signal,
+            score,
             advances,
             declines,
-            mfiValue,
-            mfiSignal,
-            pvtValue,
-            pvtSignal,
-            pvtSignalLine
+            callOiChange,
+            putOiChange,
+            aggregateStatus,
         };
-
     }, [stats, chain, stocks, stockMetadata]);
 
-    // --------------------------------------------------
-    // OVERALL SIGNAL STRENGTH
-    // --------------------------------------------------
+    const signalClass =
+        result.signal === "CALL BUY"
+            ? "call"
+            : result.signal === "PUT BUY"
+                ? "put"
+                : "hold";
 
-    const strength =
-        result.passed >= 5
-            ? "VERY STRONG"
-            : result.passed >= 3
-                ? "MEDIUM"
-                : "WEAK / WAIT";
-
-    // Preserve the existing NO TRADE condition:
-    // all six filters must have data and at least
-    // three must pass.
-    const signalReady =
-        result.waiting === 0 &&
-        result.passed >= 3 &&
-        result.direction !== "WAIT";
-
-    const signal = signalReady
-        ? result.direction
-        : "NO TRADE";
-
-    const signalColor =
-        signal === "CALL"
-            ? "#00d6a3"
-            : signal === "PUT"
-                ? "#ff4566"
-                : "#f5b82e";
-
-    // --------------------------------------------------
-    // UI
-    // --------------------------------------------------
+    const activeDirection =
+        result.signal === "CALL BUY"
+            ? result.call
+            : result.signal === "PUT BUY"
+                ? result.put
+                : null;
 
     return (
         <section className="panel crossover-signal-panel">
-
-            <div className="panel-title">
-                <span>
-                    <i className="live-dot" />
-                    NIFTY 50 WMA 8 / MA 8 CROSSOVER SIGNAL
-                </span>
-            </div>
-
-            <div className="crossover-signal-main">
-
-                <div
-                    className="crossover-direction"
-                    style={{
-                        borderColor: signalColor
-                    }}
-                >
-                    <small>TRADE SIGNAL</small>
-
-                    <strong
-                        style={{
-                            color: signalColor
-                        }}
-                    >
-                        {signal}
-                    </strong>
-
-                    <span>{strength}</span>
-                </div>
-
-                <div className="crossover-score">
-                    <small>FILTER SCORE</small>
-
-                    <strong>
-                        {result.passed} / 6
-                    </strong>
-
-                    <span>
-                        {result.waiting} filters waiting
+            <div className="panel-header">
+                <div>
+                    <h3>Crossover Signal</h3>
+                    <span className="panel-subtitle">
+                        Six directional confirmation filters
                     </span>
                 </div>
 
+                <div className={`trade-signal ${signalClass}`}>
+                    <span className="signal-label">
+                        {result.signal}
+                    </span>
+
+                    <span className="signal-score">
+                        {result.score}/6
+                    </span>
+                </div>
             </div>
 
-            <div className="crossover-filter-list">
+            <div className="signal-summary">
+                <div className="signal-summary-item">
+                    <span>CALL BUY</span>
+                    <strong>
+                        {result.call.passed}/6
+                    </strong>
+                    <small>
+                        {result.call.waiting > 0
+                            ? `${result.call.waiting} waiting`
+                            : result.call.ready
+                                ? "Qualified"
+                                : "Not qualified"}
+                    </small>
+                </div>
 
-                {result.filters.map((filter, index) => (
-                    <div
-                        className="crossover-filter-row"
-                        key={filter.name}
-                    >
+                <div className="signal-summary-item">
+                    <span>PUT BUY</span>
+                    <strong>
+                        {result.put.passed}/6
+                    </strong>
+                    <small>
+                        {result.put.waiting > 0
+                            ? `${result.put.waiting} waiting`
+                            : result.put.ready
+                                ? "Qualified"
+                                : "Not qualified"}
+                    </small>
+                </div>
+            </div>
 
-                        <span className="crossover-filter-number">
-                            {index + 1}
-                        </span>
+            <div className="crossover-filters">
+                {result.filters.map((filter, index) => {
+                    const status =
+                        result.aggregateStatus(filter);
 
-                        <div className="crossover-filter-info">
-                            <strong>{filter.name}</strong>
-
-                            <small>{filter.detail}</small>
-                        </div>
-
-                        <b
-                            className={`crossover-filter-status ${filter.status.toLowerCase()}`}
+                    return (
+                        <div
+                            className="crossover-filter-row"
+                            key={filter.name}
                         >
-                            {filter.status}
-                        </b>
+                            <div className="filter-number">
+                                {index + 1}
+                            </div>
 
-                    </div>
-                ))}
+                            <div className="filter-info">
+                                <strong>{filter.name}</strong>
+                                <small>{filter.detail}</small>
 
+                                <div className="filter-direction-status">
+                                    <span
+                                        className={`filter-status ${filter.call.toLowerCase()}`}
+                                    >
+                                        CALL: {filter.call}
+                                    </span>
+
+                                    <span
+                                        className={`filter-status ${filter.put.toLowerCase()}`}
+                                    >
+                                        PUT: {filter.put}
+                                    </span>
+                                </div>
+                            </div>
+
+                            <span
+                                className={`filter-status ${status.toLowerCase()}`}
+                            >
+                                {status}
+                            </span>
+                        </div>
+                    );
+                })}
             </div>
 
-            <div className="crossover-market-context">
-
-                <div>
-                    <span>ADVANCES</span>
-
+            <div className="market-context">
+                <div className="market-context-item">
+                    <span>Advances</span>
                     <strong className="positive">
                         {result.advances}
                     </strong>
                 </div>
 
-                <div>
-                    <span>DECLINES</span>
-
+                <div className="market-context-item">
+                    <span>Declines</span>
                     <strong className="negative">
                         {result.declines}
                     </strong>
                 </div>
 
-                <div>
-                    <span>CALL OI CHANGE</span>
-
+                <div className="market-context-item">
+                    <span>CALL OI Change</span>
                     <strong>
-                        {result.oiAvailable
-                            ? (result.callOiChange ?? 0).toLocaleString("en-IN")
-                            : "—"}
+                        {result.callOiChange.toLocaleString(
+                            "en-IN"
+                        )}
                     </strong>
                 </div>
 
-                <div>
-                    <span>PUT OI CHANGE</span>
-
+                <div className="market-context-item">
+                    <span>PUT OI Change</span>
                     <strong>
-                        {result.oiAvailable
-                            ? (result.putOiChange ?? 0).toLocaleString("en-IN")
-                            : "—"}
+                        {result.putOiChange.toLocaleString(
+                            "en-IN"
+                        )}
                     </strong>
                 </div>
-
             </div>
 
-            <div className="crossover-signal-footer">
-                5–6 PASS: Very Strong · 3–4 PASS: Medium · 0–2 PASS: Weak.
-                Signal remains NO TRADE until all six filters have data.
-                {result.failed > 0
-                    ? ` · ${result.failed} filters failed.`
-                    : ""}
+            <div className="crossover-footer">
+                {result.signal === "HOLD" ? (
+                    <span>
+                        HOLD — directional conditions are not
+                        uniquely confirmed.
+                    </span>
+                ) : (
+                    <span>
+                        {result.signal} —{" "}
+                        {activeDirection?.passed ?? 0} of 6
+                        directional filters passed.
+                    </span>
+                )}
             </div>
-
         </section>
     );
 }
