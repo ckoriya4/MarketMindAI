@@ -1,5 +1,7 @@
 
-"""Kite historical candles only. Never substitutes generated prices."""
+"""Kite historical candles and actual Kite quote snapshots.
+No synthetic prices or generated market data.
+"""
 
 import time
 import math
@@ -29,7 +31,6 @@ INTERVALS = {
     "W": "day"
 }
 
-# Kite exchange and exact index tradingsymbol mappings.
 INDEX_INSTRUMENTS = {
     "NIFTY": ("NSE", "NIFTY 50", "NIFTY 50 · NIFTY spot"),
     "BANKNIFTY": ("NSE", "NIFTY BANK", "BANK NIFTY · BANKNIFTY spot"),
@@ -42,10 +43,74 @@ INDEX_INSTRUMENTS = {
 
 _cache = {}
 _history_cache = {}
-_lock = Lock()
 
+_lock = Lock()
+_instrument_cache_lock = Lock()
+
+# Separate exchange caches.
+# oi_signal.instruments() intentionally loads only NFO.
+# The chart service must load NSE, BSE, NFO and MCX independently.
+_exchange_instrument_cache = {}
+
+
+# ---------------------------------------------------------
+# EXCHANGE INSTRUMENT LOADER
+# ---------------------------------------------------------
+
+def exchange_instruments(kite, exchange, today):
+    """
+    Load instruments from the requested exchange.
+
+    Cached once per exchange per trading date.
+    This deliberately does not use shared.instruments(),
+    because that function loads NFO only.
+    """
+
+    with _instrument_cache_lock:
+
+        cached = _exchange_instrument_cache.get(exchange)
+
+        if cached and cached["date"] == today:
+            return cached["rows"]
+
+        try:
+            rows = kite.instruments(exchange)
+
+            if not isinstance(rows, list):
+                raise ValueError(
+                    f"Invalid instrument list returned for {exchange}"
+                )
+
+            _exchange_instrument_cache[exchange] = {
+                "date": today,
+                "rows": rows
+            }
+
+            return rows
+
+        except Exception as exc:
+
+            print(
+                "[ChartService] Instrument loading failed:",
+                exchange,
+                str(exc)
+            )
+
+            raise HTTPException(
+                503,
+                f"Cannot load Kite {exchange} instruments. "
+                "Check Kite connectivity and instrument access."
+            ) from None
+
+
+# ---------------------------------------------------------
+# INDICATORS / TIME HELPERS
+# ---------------------------------------------------------
 
 def calculate_ema(prices, period):
+    if not prices:
+        return []
+
     values = [prices[0]]
 
     for p in prices[1:]:
@@ -127,6 +192,10 @@ def weekly(candles):
     return list(groups.values())
 
 
+# ---------------------------------------------------------
+# KITE CANDLE VALIDATION
+# ---------------------------------------------------------
+
 def normalize_records(records):
     by_time = {}
 
@@ -188,9 +257,11 @@ def normalize_records(records):
                 "Invalid provider volume"
             )
 
-        by_time[int(dt.timestamp())] = dict(
+        timestamp = int(dt.timestamp())
+
+        by_time[timestamp] = dict(
             values,
-            time=int(dt.timestamp()),
+            time=timestamp,
             volume=volume
         )
 
@@ -199,6 +270,10 @@ def normalize_records(records):
         for t in sorted(by_time)
     ]
 
+
+# ---------------------------------------------------------
+# QUOTE FRESHNESS
+# ---------------------------------------------------------
 
 def quote_metadata(quote, candles, now, timeframe):
     raw = quote.get("timestamp")
@@ -210,7 +285,11 @@ def quote_metadata(quote, candles, now, timeframe):
         except Exception:
             pass
 
-    age = now.timestamp() - ts if ts is not None else None
+    age = (
+        now.timestamp() - ts
+        if ts is not None
+        else None
+    )
 
     status = (
         "fresh"
@@ -259,7 +338,10 @@ def quote_metadata(quote, candles, now, timeframe):
             int(now.timestamp() - last)
         ),
         refresh_seconds=3,
-        transport="Kite REST snapshots (3-second polling), not WebSocket ticks",
+        transport=(
+            "Kite REST quote snapshots (3-second polling), "
+            "not WebSocket ticks"
+        ),
         indicator_source=(
             "Calculated from actual Kite historical OHLCV; "
             "not fetched as Kite chart studies"
@@ -272,17 +354,18 @@ def quote_metadata(quote, candles, now, timeframe):
 # ---------------------------------------------------------
 
 def resolve_instrument(kite, symbol, now):
-    """Resolve the selected market to a real Kite instrument."""
+    """Resolve the selected market to an actual Kite instrument."""
 
+    # NSE and BSE INDEX INSTRUMENTS
     if symbol in INDEX_INSTRUMENTS:
 
         exchange, tradingsymbol, label = INDEX_INSTRUMENTS[symbol]
 
-        with shared.lock:
-            instruments = shared.instruments(
-                kite,
-                now.date()
-            )
+        instruments = exchange_instruments(
+            kite,
+            exchange,
+            now.date()
+        )
 
         matches = [
             item
@@ -294,29 +377,55 @@ def resolve_instrument(kite, symbol, now):
             )
         ]
 
-        if not matches:
-            raise HTTPException(
-                503,
-                f"Kite instrument not found: {exchange}:{tradingsymbol}. "
-                "Check the Kite instrument list and market-data access."
+        if matches:
+            item = matches[0]
+
+            return (
+                item["instrument_token"],
+                f"{exchange}:{tradingsymbol}",
+                label,
+                False
             )
 
-        item = matches[0]
+        # Fallback: ask Kite's actual LTP endpoint for the
+        # instrument token. No token or price is invented.
+        quote_key = f"{exchange}:{tradingsymbol}"
 
-        return (
-            item["instrument_token"],
-            f"{exchange}:{tradingsymbol}",
-            label,
-            False
+        try:
+            quote_result = kite.ltp([quote_key])
+            quote = quote_result.get(quote_key, {})
+
+            token = quote.get("instrument_token")
+
+            if token:
+                return (
+                    token,
+                    quote_key,
+                    label,
+                    False
+                )
+
+        except Exception as exc:
+            print(
+                "[ChartService] Index LTP token lookup failed:",
+                quote_key,
+                str(exc)
+            )
+
+        raise HTTPException(
+            503,
+            f"Kite index instrument not found: {quote_key}. "
+            f"Searched the {exchange} instrument list and LTP endpoint."
         )
 
+    # NIFTY FRONT-MONTH FUTURES
     if symbol == "NIFTY_FUT":
 
-        with shared.lock:
-            instruments = shared.instruments(
-                kite,
-                now.date()
-            )
+        instruments = exchange_instruments(
+            kite,
+            "NFO",
+            now.date()
+        )
 
         futures = sorted(
             [
@@ -352,13 +461,14 @@ def resolve_instrument(kite, symbol, now):
             True
         )
 
+    # MCX CRUDE OIL FUTURES
     if symbol == "CRUDE":
 
-        with shared.lock:
-            instruments = shared.instruments(
-                kite,
-                now.date()
-            )
+        instruments = exchange_instruments(
+            kite,
+            "MCX",
+            now.date()
+        )
 
         futures = sorted(
             [
@@ -412,6 +522,7 @@ def get_chart_data(
     count=60,
     session=False
 ):
+
     symbol = symbol.strip().upper()
 
     supported_symbols = (
@@ -433,7 +544,7 @@ def get_chart_data(
         key = (symbol, timeframe)
         cached = _cache.get(key)
 
-        # Refresh chart snapshot every 3 seconds.
+        # Cached REST response for three seconds.
         if (
             cached
             and time.monotonic() - cached[0] < 3
@@ -504,6 +615,7 @@ def get_chart_data(
                 records = []
 
                 while start < now:
+
                     end = min(
                         now,
                         start + timedelta(
@@ -529,8 +641,8 @@ def get_chart_data(
                 if not incoming:
                     raise HTTPException(
                         503,
-                        "No current historical candles returned; "
-                        "keeping chart explicitly stale"
+                        "No historical candles returned by Kite. "
+                        "Check the instrument, token and historical-data access."
                     )
 
                 existing.update({
@@ -547,7 +659,7 @@ def get_chart_data(
                 if not raw:
                     raise HTTPException(
                         503,
-                        "No valid actual candles"
+                        "No valid actual Kite candles"
                     )
 
                 _history_cache[history_key] = dict(
@@ -561,6 +673,7 @@ def get_chart_data(
                     else raw
                 )
 
+                # Fetch real current Kite quote.
                 quote_response = kite.quote([quote_key])
                 quote = quote_response.get(quote_key, {})
 
@@ -575,8 +688,8 @@ def get_chart_data(
                 ):
                     raise HTTPException(
                         503,
-                        "Actual Kite LTP unavailable; "
-                        "no candle-close substitution"
+                        "Actual Kite LTP unavailable. "
+                        "No candle-close substitution was used."
                     )
 
                 valid_close = (
@@ -603,6 +716,7 @@ def get_chart_data(
                     instrument_token=token,
                     quote_key=quote_key,
                     candles=candles,
+
                     indicators=dict(
                         ltp=ltp,
                         change=(
@@ -616,6 +730,7 @@ def get_chart_data(
                             else None
                         )
                     ),
+
                     fetched_at=datetime.now(IST).isoformat()
                 )
 

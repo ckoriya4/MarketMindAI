@@ -423,14 +423,14 @@ export default function IndicatorCandleChart({
           throw new Error("Actual Kite candles required");
         }
 
-        // Do not display another market's response.
+        // Validate the actual market symbol, not the display label.
         if (
-          data.instrument &&
-          String(data.instrument).toUpperCase() !==
+          data.symbol &&
+          String(data.symbol).toUpperCase() !==
           effectiveInstrument.toUpperCase()
         ) {
           throw new Error(
-            `Received ${data.instrument} data while ${effectiveInstrument} is selected.`
+            `Received ${data.symbol} data while ${effectiveInstrument} is selected.`
           );
         }
 
