@@ -31,9 +31,20 @@ export interface ChartStats {
   rsi14: number | null;
   mfi14?: number | null;
   pvt?: number | null;
+
+  // Previous PVT values for real crossover detection.
+  pvt_previous?: number | null;
+  pvt_signal_line?: number | null;
+  pvt_signal_line_previous?: number | null;
+
+  // Separate 15-minute trend values.
+  trend15_ema9?: number | null;
+  trend15_ema21?: number | null;
+
   macd: string;
   ma8: number | null;
   wma8: number | null;
+
   [key: string]: number | string | null | undefined;
 }
 
@@ -125,6 +136,52 @@ const normalizeTimeframe = (value: string) => {
   }
 
   return normalized;
+};
+
+const getNumber = (value: unknown): number | null => {
+  if (
+    typeof value !== "number" ||
+    !Number.isFinite(value)
+  ) {
+    return null;
+  }
+
+  return value;
+};
+
+const getLastTwoValues = (
+  points: unknown
+): { previous: number | null; current: number | null } => {
+  if (!Array.isArray(points)) {
+    return {
+      previous: null,
+      current: null
+    };
+  }
+
+  const validPoints = points.filter(
+    (point): point is { time: number; value: number } =>
+      point !== null &&
+      typeof point === "object" &&
+      typeof (point as Point).time === "number" &&
+      typeof (point as Point).value === "number" &&
+      Number.isFinite((point as Point).value)
+  );
+
+  if (validPoints.length < 2) {
+    return {
+      previous: null,
+      current:
+        validPoints.length === 1
+          ? validPoints[0].value
+          : null
+    };
+  }
+
+  return {
+    previous: validPoints[validPoints.length - 2].value,
+    current: validPoints[validPoints.length - 1].value
+  };
 };
 
 export default function IndicatorCandleChart({
@@ -489,7 +546,7 @@ export default function IndicatorCandleChart({
       );
 
       try {
-        // Build the request for the selected instrument.
+        // Build request for the selected instrument.
         const params = new URLSearchParams({
           symbol: isOptionChart ? marketSymbol : effectiveInstrument,
           timeframe: selectedTimeframe,
@@ -504,7 +561,6 @@ export default function IndicatorCandleChart({
             throw new Error("Select an option expiry first.");
           }
 
-          // Dedicated actual Kite option-contract endpoint.
           endpoint = "/api/chart/option-candles";
 
           params.set("expiry", expiry);
@@ -535,7 +591,7 @@ export default function IndicatorCandleChart({
           throw new Error("Actual Kite candles required");
         }
 
-        // Verify that the returned underlying matches the selection.
+        // Verify returned underlying.
         if (
           data.symbol &&
           String(data.symbol).toUpperCase() !==
@@ -548,7 +604,7 @@ export default function IndicatorCandleChart({
           );
         }
 
-        // Verify the exact returned option contract.
+        // Verify exact returned option contract.
         if (isOptionChart) {
           const returnedStrike =
             Number(data.option_contract?.strike ?? data.selected_strike);
@@ -689,9 +745,128 @@ export default function IndicatorCandleChart({
           loaded = true;
         }
 
+        // --------------------------------------------------
+        // PVT PREVIOUS VALUES
+        // Extract the last two actual PVT and PVT EMA9 points.
+        // --------------------------------------------------
+
+        const pvtPoints = getLastTwoValues(data.pvt);
+        const pvtSignalPoints = getLastTwoValues(
+          data.pvt_signal_line
+        );
+
+        const pvtPrevious =
+          getNumber(data.indicators?.pvt_previous) ??
+          pvtPoints.previous;
+
+        const pvtSignalLinePrevious =
+          getNumber(data.indicators?.pvt_signal_line_previous) ??
+          pvtSignalPoints.previous;
+
+        // --------------------------------------------------
+        // SEPARATE 15-MINUTE TREND
+        // Use the selected chart response if it is already 15m.
+        // Otherwise fetch the same contract at 15m.
+        // --------------------------------------------------
+
+        let trend15Ema9: number | null = null;
+        let trend15Ema21: number | null = null;
+
+        if (selectedTimeframe.toLowerCase() === "15m") {
+          trend15Ema9 = getNumber(data.indicators?.ema9);
+          trend15Ema21 = getNumber(data.indicators?.ema21);
+        } else {
+          try {
+            const trendParams = new URLSearchParams(params);
+            trendParams.set("timeframe", "15m");
+
+            const trendResponse = await fetch(
+              apiUrl(`${endpoint}?${trendParams.toString()}`),
+              { signal: currentController.signal }
+            );
+
+            if (trendResponse.ok) {
+              const trendData = await trendResponse.json();
+
+              const validTrendResponse =
+                trendData.source === "kite" &&
+                Array.isArray(trendData.candles) &&
+                trendData.candles.length > 0;
+
+              const sameUnderlying =
+                !trendData.symbol ||
+                String(trendData.symbol).toUpperCase() ===
+                (isOptionChart
+                  ? marketSymbol
+                  : effectiveInstrument).toUpperCase();
+
+              let sameOptionContract = true;
+
+              if (isOptionChart) {
+                const trendStrike = Number(
+                  trendData.option_contract?.strike ??
+                  trendData.selected_strike
+                );
+
+                const trendType = String(
+                  trendData.option_contract?.option_type ??
+                  trendData.selected_option_type ??
+                  ""
+                ).toUpperCase();
+
+                sameOptionContract =
+                  trendStrike === chartStrike &&
+                  trendType === optionType;
+              }
+
+              if (
+                validTrendResponse &&
+                sameUnderlying &&
+                sameOptionContract
+              ) {
+                trend15Ema9 = getNumber(
+                  trendData.indicators?.ema9
+                );
+
+                trend15Ema21 = getNumber(
+                  trendData.indicators?.ema21
+                );
+              }
+            }
+          } catch (trendError) {
+            // The main chart remains usable if the separate
+            // 15-minute request is unavailable.
+            if (
+              trendError instanceof Error &&
+              trendError.name === "AbortError"
+            ) {
+              throw trendError;
+            }
+
+            trend15Ema9 = null;
+            trend15Ema21 = null;
+          }
+        }
+
+        if (!active) return;
+
         const value: ChartStats = {
           ...data.indicators,
-          instrument: data.instrument
+
+          instrument: data.instrument,
+
+          // Previous PVT values for true crossover checks.
+          pvt_previous: pvtPrevious,
+          pvt_signal_line_previous: pvtSignalLinePrevious,
+
+          // Current PVT EMA9 value.
+          pvt_signal_line:
+            getNumber(data.indicators?.pvt_signal_line) ??
+            pvtSignalPoints.current,
+
+          // Separate actual 15-minute EMA trend.
+          trend15_ema9: trend15Ema9,
+          trend15_ema21: trend15Ema21
         };
 
         setStats(value);
@@ -793,7 +968,7 @@ export default function IndicatorCandleChart({
           )}
         </select>
 
-        {/* Strike selector replaces the timeframe dropdown. */}
+        {/* Strike selector. */}
         <select
           aria-label="Option strike price"
           value={chartStrike ?? ""}
