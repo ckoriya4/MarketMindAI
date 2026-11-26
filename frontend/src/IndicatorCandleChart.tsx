@@ -149,41 +149,24 @@ const getNumber = (value: unknown): number | null => {
   return value;
 };
 
-// Calculate MA8/WMA8 directly from the exact candle response used by the chart.
-// The API candle order is preserved; the newest returned candle is the final item.
-const calculateCandleMaWma = (
-  candles: Array<{ close: number }>
-): { ma8: number; wma8: number } | null => {
-  if (!Array.isArray(candles)) return null;
+// Read MA8/WMA8 from the exact data points plotted by the chart,
+// matching the timestamp of the latest candle.
+const getIndicatorValueAtTime = (
+  points: unknown,
+  candleTime: number
+): number | null => {
+  if (!Array.isArray(points)) return null;
 
-  const validCandles = candles.filter(
-    candle =>
-      candle !== null &&
-      typeof candle === "object" &&
-      typeof candle.close === "number" &&
-      Number.isFinite(candle.close) &&
-      candle.close > 0
+  const matchingPoint = [...points].reverse().find(
+    (point): point is Point =>
+      point !== null &&
+      typeof point === "object" &&
+      Number(point.time) === candleTime &&
+      typeof point.value === "number" &&
+      Number.isFinite(point.value)
   );
 
-  if (validCandles.length < 8) return null;
-
-  const closes = validCandles
-    .slice(-8)
-    .map(candle => candle.close);
-
-  const ma8 =
-    closes.reduce((sum, close) => sum + close, 0) / 8;
-
-  // Oldest candle weight = 1; newest candle weight = 8.
-  const weightedTotal = closes.reduce(
-    (sum, close, index) => sum + close * (index + 1),
-    0
-  );
-
-  return {
-    ma8,
-    wma8: weightedTotal / 36
-  };
+  return matchingPoint ? matchingPoint.value : null;
 };
 
 const getLastTwoValues = (
@@ -887,16 +870,29 @@ export default function IndicatorCandleChart({
 
         if (!active) return;
 
-        // MA8/WMA8 used by the signal are calculated from the same
-        // candle response already fetched and plotted above. No LTP is used.
-        const candleMaWma = calculateCandleMaWma(data.candles);
+        // Read the exact MA8/WMA8 points drawn on the chart and match
+        // them to the latest candle timestamp. No separate calculation
+        // or LTP value is used for the signal.
+        const latestCandleTime = Number(
+          bars[bars.length - 1]?.time
+        );
+
+        const chartMa8 = getIndicatorValueAtTime(
+          data.ma8,
+          latestCandleTime
+        );
+
+        const chartWma8 = getIndicatorValueAtTime(
+          data.wma8,
+          latestCandleTime
+        );
 
         const value: ChartStats = {
           ...data.indicators,
 
-          // Override indicator stats with calculations from the chart candles.
-          ma8: candleMaWma?.ma8 ?? null,
-          wma8: candleMaWma?.wma8 ?? null,
+          // These are exactly the values plotted by the chart overlays.
+          ma8: chartMa8,
+          wma8: chartWma8,
 
           instrument: data.instrument,
 
