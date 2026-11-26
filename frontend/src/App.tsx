@@ -403,18 +403,21 @@ export default function App() {
         ? chartIndicators.wma8
         : null;
 
+    // Signed gap: positive means WMA8 is above MA8; negative means below.
     const maDifference =
       ma8 !== null && wma8 !== null
-        ? Math.abs(ma8 - wma8)
+        ? wma8 - ma8
         : null;
 
     let maType: "PUT BUY" | "CALL BUY" | "EQUAL" | "HOLD" | "WAITING" = "WAITING";
 
     if (maDifference !== null) {
-      if (maDifference < 0.000001) {
+      if (Math.abs(maDifference) < 0.000001) {
         maType = "EQUAL";
       } else if (maDifference >= 5) {
-        maType = ma8! > wma8! ? "PUT BUY" : "CALL BUY";
+        maType = "CALL BUY";
+      } else if (maDifference <= -5) {
+        maType = "PUT BUY";
       } else {
         maType = "HOLD";
       }
@@ -662,7 +665,7 @@ export default function App() {
                 }
               </span>
 
-              <span className="oi-threshold">Buy threshold: 5 points</span>
+              <span className="oi-threshold">Buy threshold: ±5 points</span>
             </div>
           </div>
         ) : (
