@@ -18,8 +18,9 @@ import requests
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from .services.option_chart_service import get_option_chart_data
 from pydantic import BaseModel
+
+from .services.option_chart_service import get_option_chart_data
 
 
 # ---------------------------------------------------------
@@ -73,6 +74,12 @@ from .services.oi_percent_reference import router as oi_reference_router
 from .services.direct_alerts import install_direct_alerts
 from .services.kite_login import router as kite_login_router
 
+# NEW: Trade Excel recorder.
+from .services.trade_excel_recorder import (
+    router as trade_excel_router,
+    trade_excel_recorder,
+)
+
 
 # ---------------------------------------------------------
 # CORS ORIGINS
@@ -115,11 +122,15 @@ async def lifespan(app: FastAPI):
 
     print("[MarketMind] Starting dashboard services...")
 
-    # Start recorder.
+    # Start existing OI session recorder.
     try:
         recorder.start()
+        print("[MarketMind] OI session recorder started.")
     except Exception as exc:
-        print("[MarketMind] Recorder startup warning:", str(exc))
+        print(
+            "[MarketMind] Recorder startup warning:",
+            str(exc)
+        )
 
     # Reload token from PostgreSQL and verify with Zerodha.
     try:
@@ -167,6 +178,19 @@ async def lifespan(app: FastAPI):
             str(exc)
         )
 
+    # NEW: Start background Excel signal recorder.
+    # It runs independently of the frontend/browser.
+    try:
+        trade_excel_recorder.start()
+        print(
+            "[MarketMind] Trade Excel recorder started."
+        )
+    except Exception as exc:
+        print(
+            "[MarketMind] Trade Excel recorder startup warning:",
+            str(exc)
+        )
+
     try:
 
         yield
@@ -175,20 +199,46 @@ async def lifespan(app: FastAPI):
 
         print("[MarketMind] Stopping dashboard services...")
 
+        # Stop Excel recorder.
+        try:
+            await asyncio.to_thread(
+                trade_excel_recorder.stop
+            )
+            print(
+                "[MarketMind] Trade Excel recorder stopped."
+            )
+        except Exception as exc:
+            print(
+                "[MarketMind] Trade Excel recorder shutdown error:",
+                str(exc)
+            )
+
+        # Stop Kite WebSocket.
         try:
             kite_stream.stop()
         except Exception as exc:
-            print("[KiteStream] Shutdown error:", str(exc))
+            print(
+                "[KiteStream] Shutdown error:",
+                str(exc)
+            )
 
+        # Stop stock OI collector.
         try:
             stock_oi_collector.stop()
         except Exception as exc:
-            print("[MarketMind] Collector shutdown error:", str(exc))
+            print(
+                "[MarketMind] Collector shutdown error:",
+                str(exc)
+            )
 
+        # Stop existing OI session recorder.
         try:
             await asyncio.to_thread(recorder.stop)
         except Exception as exc:
-            print("[MarketMind] Recorder shutdown error:", str(exc))
+            print(
+                "[MarketMind] Recorder shutdown error:",
+                str(exc)
+            )
 
         print("[MarketMind] Dashboard stopped.")
 
@@ -232,6 +282,9 @@ app.include_router(live_crude_router)
 app.include_router(trade_setup_router)
 app.include_router(oi_reference_router)
 app.include_router(kite_login_router)
+
+# NEW: Excel recorder configuration API.
+app.include_router(trade_excel_router)
 
 
 # ---------------------------------------------------------
@@ -549,6 +602,7 @@ def chart_candles(
 
     return data
 
+
 # ---------------------------------------------------------
 # SELECTED OPTION CONTRACT CHART
 # ---------------------------------------------------------
@@ -572,6 +626,8 @@ def option_chart_candles(
         count=count,
         session=session
     )
+
+
 # ---------------------------------------------------------
 # CHART TICK
 # ---------------------------------------------------------

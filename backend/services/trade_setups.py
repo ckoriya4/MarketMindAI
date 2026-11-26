@@ -1,3 +1,4 @@
+
 """Four descriptive option setup scores. Missing factors are never fabricated."""
 
 import math
@@ -20,8 +21,6 @@ cache = {}
 
 ACTIONS = ("CALL BUY", "PUT BUY", "CALL SELL", "PUT SELL")
 
-# The requested raw weights total 110. These normalized weights preserve
-# their relative importance while making the complete score exactly 100.
 WEIGHTS = {
     "Trend / EMA50": 10.91,
     "Price structure breakout": 9.09,
@@ -188,7 +187,6 @@ def oi_context(data, now):
     cross_time = None
 
     for point in sorted(minutes.values(), key=lambda p: p["time"]):
-        # Only completed one-minute observations may confirm a crossover.
         if point["time"] + 60 > now:
             continue
 
@@ -226,8 +224,8 @@ def oi_context(data, now):
         "direction": dominance,
         "cross_direction": cross if eligible else 0,
         "cross_time": cross_time,
-        "a": last_a,  # Put OI change
-        "b": last_b,  # Call OI change
+        "a": last_a,
+        "b": last_b,
         "put_change": last_a,
         "call_change": last_b,
     }
@@ -269,6 +267,11 @@ def execution_plan(action, atm, step, contracts, quotes):
         bid = (depth.get("buy") or [{}])[0].get("price")
         ask = (depth.get("sell") or [{}])[0].get("price")
 
+        # Actual Kite last traded price. Do not substitute bid/ask price.
+        ltp = quote.get("last_price")
+        if not numeric(ltp) or ltp <= 0:
+            ltp = None
+
         book_ok = numeric(bid) and numeric(ask) and 0 < bid <= ask
 
         if not book_ok:
@@ -297,6 +300,10 @@ def execution_plan(action, atm, step, contracts, quotes):
             "strike": strike,
             "symbol": contract["tradingsymbol"],
             "price": price,
+
+            # Added fields: actual Kite quote data.
+            "ltp": ltp,
+            "instrument_token": contract.get("instrument_token"),
         })
 
     if is_sell and not 0 < net_credit < step:
@@ -328,6 +335,31 @@ def execution_plan(action, atm, step, contracts, quotes):
     }
 
 
+def add_option_chain_oi(execution, rows):
+    """Attach matching strike's CE/PE OI values to each execution leg."""
+    for leg in execution.get("legs", []):
+        matching_row = next(
+            (
+                row for row in rows
+                if numeric(row.get("strike"))
+                and float(row["strike"]) == float(leg["strike"])
+            ),
+            None,
+        )
+
+        if matching_row is None:
+            leg["oi"] = None
+            leg["oi_change"] = None
+            leg["oi_change_pct"] = None
+            continue
+
+        prefix = "call" if leg["type"] == "CE" else "put"
+
+        leg["oi"] = matching_row.get(f"{prefix}_oi")
+        leg["oi_change"] = matching_row.get(f"{prefix}_oi_chg")
+        leg["oi_change_pct"] = matching_row.get(f"{prefix}_oi_pct_chg")
+
+
 @router.get("/api/signals/trade-setups")
 def setups(
     expiry: str | None = Query(None),
@@ -346,7 +378,6 @@ def setups(
 
             chain = get_dynamic_option_chain("NIFTY", expiry, 3)
 
-            # Use the same 15-minute timeframe as the main chart.
             chart = get_chart_data(
                 symbol="NIFTY_FUT",
                 timeframe=CHART_TIMEFRAME,
@@ -559,6 +590,10 @@ def setups(
                     raw_quotes,
                 )
 
+                # Add actual option-chain OI to each matching strike.
+                # This does not change the scoring calculations.
+                add_option_chain_oi(execution, rows)
+
                 suitable, model_detail = suitability(
                     action,
                     execution,
@@ -570,12 +605,10 @@ def setups(
                     historical_volatility,
                 )
 
-                # EMA50 directional trend.
                 ema50_pass = (
                     price > ema50 if bullish else price < ema50
                 ) if numeric(ema50) else None
 
-                # Breakout against the previous five completed candles.
                 if len(prior) == 5:
                     breakout_pass = (
                         price > max(candle["high"] for candle in prior)
@@ -585,20 +618,16 @@ def setups(
                 else:
                     breakout_pass = None
 
-                # Session VWAP from actual NIFTY futures traded volume.
                 vwap_pass = (
                     price > vwap if bullish else price < vwap
                 ) if numeric(vwap) else None
 
-                # Fast alignment: WMA8 above/below MA8 and price on the
-                # same side of WMA8.
                 fast_alignment = (
                     wma8 > ma8 and price > wma8
                     if bullish
                     else wma8 < ma8 and price < wma8
                 ) if numeric(wma8) and numeric(ma8) else None
 
-                # Directional momentum ranges.
                 rsi_pass = (
                     52 < rsi < 68 if bullish else 32 < rsi < 48
                 ) if numeric(rsi) else None
@@ -615,7 +644,6 @@ def setups(
                     else None
                 )
 
-                # Use the requested 1.3x direct-sum dominance threshold.
                 if oi is None:
                     oi_dominance_pass = None
                 elif bullish:
@@ -631,14 +659,10 @@ def setups(
                     pcr > 1.15 if bullish else pcr < 0.85
                 ) if numeric(pcr) else None
 
-                # MFI is direction-specific: 50–70 for bullish momentum,
-                # 30–50 for bearish momentum. Actual volume is required.
                 mfi_pass = (
                     50 < mfi < 70 if bullish else 30 < mfi < 50
                 ) if numeric(mfi) else None
 
-                # PVT above its EMA9 signal line supports bullish direction;
-                # below it supports bearish direction.
                 pvt_pass = (
                     pvt > pvt_signal_line
                     if bullish
@@ -646,80 +670,36 @@ def setups(
                 ) if numeric(pvt) and numeric(pvt_signal_line) else None
 
                 checks = [
-                    rule(
-                        "Trend / EMA50",
-                        ema50_pass,
-                        "Completed 15-minute NIFTY futures close vs EMA50",
-                    ),
-                    rule(
-                        "Price structure breakout",
-                        breakout_pass,
-                        "Close beyond the previous five completed 15-minute bars",
-                    ),
-                    rule(
-                        "Session VWAP",
-                        vwap_pass,
-                        "NIFTY futures session VWAP from actual traded volume",
-                    ),
-                    rule(
-                        "WMA8 + MA8 fast alignment",
-                        fast_alignment,
-                        "Bullish: WMA8 > MA8 and price > WMA8; bearish: WMA8 < MA8 and price < WMA8",
-                    ),
-                    rule(
-                        "RSI14",
-                        rsi_pass,
-                        "Bullish range 52–68; bearish range 32–48",
-                    ),
-                    rule(
-                        "MACD histogram",
-                        macd_pass,
-                        "Bullish above zero; bearish below zero (MACD 12/26/9)",
-                    ),
-                    rule(
-                        "Direct-sum OI crossover",
-                        oi_cross_pass,
-                        oi_error or "Confirmed same-basket direct-sum crossover within five minutes",
-                    ),
-                    rule(
-                        "Direct-sum OI dominance",
-                        oi_dominance_pass,
-                        oi_error or "Put OI change > Call OI change × 1.3 for bullish; reverse for bearish",
-                    ),
-                    rule(
-                        "PCR",
-                        pcr_pass,
-                        "Selected expiry and ±3 strike range; bullish >1.15, bearish <0.85",
-                    ),
-                    rule(
-                        "IV / Greeks / expiry suitability (model)",
-                        suitable,
-                        model_detail,
-                    ),
-                    rule(
-                        "Executable bid/ask",
-                        execution.get("valid"),
-                        "BUY at ask / SELL at bid; SELL setups require a protective hedge",
-                    ),
-                    rule(
-                        "Bid/ask spread <=1%",
-                        (
-                            execution.get("spread_pct") <= 1
-                            if numeric(execution.get("spread_pct"))
-                            else None
-                        ),
-                        "Maximum quoted leg spread must be 1% or less",
-                    ),
-                    rule(
-                        "MFI14",
-                        mfi_pass,
-                        "Actual-volume MFI14; bullish range 50–70, bearish range 30–50",
-                    ),
-                    rule(
-                        "PVT vs EMA9 signal",
-                        pvt_pass,
-                        "PVT above EMA9 for bullish direction; below EMA9 for bearish direction",
-                    ),
+                    rule("Trend / EMA50", ema50_pass,
+                         "Completed 15-minute NIFTY futures close vs EMA50"),
+                    rule("Price structure breakout", breakout_pass,
+                         "Close beyond the previous five completed 15-minute bars"),
+                    rule("Session VWAP", vwap_pass,
+                         "NIFTY futures session VWAP from actual traded volume"),
+                    rule("WMA8 + MA8 fast alignment", fast_alignment,
+                         "Bullish: WMA8 > MA8 and price > WMA8; bearish: WMA8 < MA8 and price < WMA8"),
+                    rule("RSI14", rsi_pass,
+                         "Bullish range 52–68; bearish range 32–48"),
+                    rule("MACD histogram", macd_pass,
+                         "Bullish above zero; bearish below zero (MACD 12/26/9)"),
+                    rule("Direct-sum OI crossover", oi_cross_pass,
+                         oi_error or "Confirmed same-basket direct-sum crossover within five minutes"),
+                    rule("Direct-sum OI dominance", oi_dominance_pass,
+                         oi_error or "Put OI change > Call OI change × 1.3 for bullish; reverse for bearish"),
+                    rule("PCR", pcr_pass,
+                         "Selected expiry and ±3 strike range; bullish >1.15, bearish <0.85"),
+                    rule("IV / Greeks / expiry suitability (model)", suitable,
+                         model_detail),
+                    rule("Executable bid/ask", execution.get("valid"),
+                         "BUY at ask / SELL at bid; SELL setups require a protective hedge"),
+                    rule("Bid/ask spread <=1%",
+                         execution.get("spread_pct") <= 1
+                         if numeric(execution.get("spread_pct")) else None,
+                         "Maximum quoted leg spread must be 1% or less"),
+                    rule("MFI14", mfi_pass,
+                         "Actual-volume MFI14; bullish range 50–70, bearish range 30–50"),
+                    rule("PVT vs EMA9 signal", pvt_pass,
+                         "PVT above EMA9 for bullish direction; below EMA9 for bearish direction"),
                 ]
 
                 cards.append(
