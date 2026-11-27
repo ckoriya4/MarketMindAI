@@ -1,3 +1,4 @@
+
 """Actual listed option contracts and Kite quote snapshots; no simulated option values."""
 
 import math
@@ -271,27 +272,30 @@ def save_option_chain_history(symbol, expiry, rows, raw, baseline):
         return 0
 
     try:
+        # FIX:
+        # executemany() is called on cursor, not connection.
         with get_db_connection() as conn:
-            conn.executemany(
-                """
-                INSERT INTO option_chain_history (
-                    symbol,
-                    expiry,
-                    strike,
-                    option_type,
-                    ltp,
-                    oi,
-                    oi_change,
-                    volume,
-                    recorded_at
+            with conn.cursor() as cur:
+                cur.executemany(
+                    """
+                    INSERT INTO option_chain_history (
+                        symbol,
+                        expiry,
+                        strike,
+                        option_type,
+                        ltp,
+                        oi,
+                        oi_change,
+                        volume,
+                        recorded_at
+                    )
+                    VALUES (
+                        %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s
+                    )
+                    """,
+                    records
                 )
-                VALUES (
-                    %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s
-                )
-                """,
-                records
-            )
 
         return len(records)
 
