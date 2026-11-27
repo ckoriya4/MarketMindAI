@@ -59,7 +59,6 @@ def number(value):
 
 
 def log_warning(message):
-    """Avoid printing the same warning repeatedly."""
     global _last_warning
 
     message = str(message)
@@ -163,8 +162,6 @@ def save_config(expiry=None, risk_budget=None):
 
 # ============================================================
 # UPDATE EXPIRY ONLY
-# IMPORTANT:
-# Do not overwrite the current risk_budget.
 # ============================================================
 
 def save_expiry_only(expiry):
@@ -266,8 +263,7 @@ def save_state(key, state):
 
 
 # ============================================================
-# EXCEL WORKBOOK
-# EXACTLY TWO SHEETS
+# EXCEL WORKBOOK - EXACTLY TWO SHEETS
 # ============================================================
 
 SIGNAL_HEADERS = [
@@ -318,15 +314,8 @@ def style_header(ws):
     ws.auto_filter.ref = ws.dimensions
 
     for cell in ws[1]:
-        cell.font = Font(
-            bold=True,
-            color="FFFFFF"
-        )
-
-        cell.fill = PatternFill(
-            "solid",
-            fgColor="1F4E78"
-        )
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = PatternFill("solid", fgColor="1F4E78")
 
 
 def get_workbook(now):
@@ -386,12 +375,9 @@ def get_workbook(now):
 
 def create_daily_workbook():
 
-    """Create today's workbook immediately when recorder starts."""
-
     now = datetime.now(IST)
 
     with _excel_lock:
-
         wb, path = get_workbook(now)
 
         try:
@@ -399,9 +385,7 @@ def create_daily_workbook():
         finally:
             wb.close()
 
-    print(
-        f"[TradeExcelRecorder] Excel workbook ready: {path}"
-    )
+    print(f"[TradeExcelRecorder] Excel workbook ready: {path}")
 
     return path
 
@@ -411,7 +395,6 @@ def append_excel(signal, event=None):
     now = datetime.now(IST)
 
     with _excel_lock:
-
         wb, path = get_workbook(now)
 
         try:
@@ -466,8 +449,6 @@ def append_excel(signal, event=None):
 
 def append_initial_ltp(signal):
 
-    """Record original LTP for every newly created signal ID."""
-
     append_excel(
         signal,
         {
@@ -483,7 +464,6 @@ def append_initial_ltp(signal):
 # ============================================================
 
 def make_signal_id():
-
     return str(uuid.uuid4())
 
 
@@ -512,30 +492,29 @@ def process_card(action, card, config, expiry, quote_time):
 
     risk_budget = config.get("risk_budget")
 
-    # No Risk Budget:
-    # Use the same Base Score used by the dashboard.
+    # ========================================================
+    # IMPORTANT CHANGE:
+    # ALWAYS USE BASE SCORE FOR EXCEL SIGNAL SELECTION.
     #
-    # Risk Budget available:
-    # Use risk-adjusted dashboard score.
+    # Risk Budget and Dashboard Score do not affect
+    # the Excel recorder's 60% entry condition.
+    # ========================================================
 
-    if risk_budget is None:
-        score = base_score
-    else:
-        score = dashboard_score
+    score = base_score
 
     print(
         f"[TradeExcelRecorder] Checking {action} | "
         f"Dashboard Score: {dashboard_score} | "
         f"Base Score: {base_score} | "
         f"Risk Budget: {risk_budget} | "
-        f"Selected Score: {score}"
+        f"Selected Score (BASE): {score}"
     )
 
     if not number(score):
 
         print(
             f"[TradeExcelRecorder] Skipped {action}: "
-            "Selected score is missing or invalid."
+            f"Invalid Base Score: {base_score!r}"
         )
 
         return
@@ -557,7 +536,7 @@ def process_card(action, card, config, expiry, quote_time):
     if score < MIN_SCORE:
 
         print(
-            f"[TradeExcelRecorder] {action} score is "
+            f"[TradeExcelRecorder] {action} BASE score is "
             f"{score:.2f}%, below {MIN_SCORE}%."
         )
 
@@ -565,7 +544,7 @@ def process_card(action, card, config, expiry, quote_time):
 
             print(
                 f"[TradeExcelRecorder] Resetting active "
-                f"{action} signal because score is below 60%."
+                f"{action} signal because Base Score is below 60%."
             )
 
             reset_signal_state(state_key)
@@ -589,10 +568,8 @@ def process_card(action, card, config, expiry, quote_time):
         return
 
     leg = legs[0]
-
     ltp = leg.get("ltp")
 
-    # Never fabricate LTP.
     if not number(ltp) or ltp <= 0:
 
         print(
@@ -610,10 +587,6 @@ def process_card(action, card, config, expiry, quote_time):
         "option_type": leg.get("type"),
         "trading_symbol": leg.get("symbol"),
     }
-
-    # --------------------------------------------------------
-    # CHECK SAME CONTRACT
-    # --------------------------------------------------------
 
     same_contract = (
         state.get("expiry") == current_contract["expiry"]
@@ -649,7 +622,7 @@ def process_card(action, card, config, expiry, quote_time):
             "unique_id": unique_id,
             "action": action,
             "score": round(score, 2),
-            "base_score": base_score,
+            "base_score": round(float(base_score), 2),
             "risk_budget": risk_budget,
             "expiry": expiry,
             "strike": leg.get("strike"),
@@ -663,10 +636,10 @@ def process_card(action, card, config, expiry, quote_time):
             "quote_time": quote_time,
         }
 
-        # Sheet 1: signal entry.
+        # Sheet 1: Signal entry.
         append_excel(signal)
 
-        # Sheet 2: initial LTP baseline.
+        # Sheet 2: Initial LTP baseline.
         append_initial_ltp(signal)
 
         state = {
@@ -686,7 +659,7 @@ def process_card(action, card, config, expiry, quote_time):
 
         print(
             f"[TradeExcelRecorder] New signal: "
-            f"{action} | Score: {score:.2f}% | "
+            f"{action} | Base Score: {score:.2f}% | "
             f"ID: {unique_id} | LTP: {ltp}"
         )
 
@@ -720,9 +693,7 @@ def process_card(action, card, config, expiry, quote_time):
         "initial_ltp": float(initial_ltp),
     }
 
-    # --------------------------------------------------------
     # +20% EVENT
-    # --------------------------------------------------------
 
     if change_pct >= LTP_MOVE and not state.get("seen_up"):
 
@@ -743,9 +714,7 @@ def process_card(action, card, config, expiry, quote_time):
             f"Change: {change_pct:.2f}%"
         )
 
-    # --------------------------------------------------------
     # -20% EVENT
-    # --------------------------------------------------------
 
     elif change_pct <= -LTP_MOVE and not state.get("seen_down"):
 
@@ -784,7 +753,6 @@ class TradeExcelRecorder:
 
         initialize_db()
 
-        # Create today's Excel file immediately.
         try:
             create_daily_workbook()
 
@@ -875,7 +843,6 @@ class TradeExcelRecorder:
                 str(requested_expiry).strip().upper()
             )
 
-        # Use nearest listed expiry if saved expiry is invalid.
         if selected_expiry is None:
 
             selected_expiry = valid_expiries[0]
@@ -887,8 +854,6 @@ class TradeExcelRecorder:
                 selected_expiry,
             )
 
-            # Update expiry ONLY.
-            # Do not overwrite risk_budget.
             save_expiry_only(selected_expiry)
 
             config["expiry"] = selected_expiry
@@ -901,7 +866,6 @@ class TradeExcelRecorder:
 
     def record_once(self):
 
-        # Always read latest configuration from SQLite.
         config = read_config()
 
         print(
@@ -910,7 +874,6 @@ class TradeExcelRecorder:
             f"Risk Budget: {config.get('risk_budget')}"
         )
 
-        # Lazy import avoids circular imports.
         from .trade_setups import setups
 
         selected_expiry = self.get_valid_expiry(config)
@@ -924,7 +887,8 @@ class TradeExcelRecorder:
 
             return
 
-        # Use latest risk budget from config.
+        # Keep existing dashboard setup request.
+        # Excel selection independently uses Base Score.
         result = setups(
             expiry=selected_expiry,
             risk_budget=config.get("risk_budget"),
