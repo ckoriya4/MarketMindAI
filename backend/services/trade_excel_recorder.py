@@ -18,6 +18,10 @@ from openpyxl.styles import Font, PatternFill
 from pydantic import BaseModel, Field
 
 
+# ============================================================
+# CONFIGURATION
+# ============================================================
+
 IST = ZoneInfo("Asia/Kolkata")
 
 BASE = Path(__file__).resolve().parent.parent
@@ -38,7 +42,14 @@ router = APIRouter()
 
 _db_lock = threading.RLock()
 _excel_lock = threading.RLock()
+_warning_lock = threading.Lock()
 
+_last_warning = None
+
+
+# ============================================================
+# COMMON HELPERS
+# ============================================================
 
 def number(value):
     return (
@@ -47,6 +58,32 @@ def number(value):
         and math.isfinite(value)
     )
 
+
+def log_warning(message):
+    """Avoid printing the same warning every 10 seconds."""
+    global _last_warning
+
+    message = str(message)
+
+    with _warning_lock:
+        if message == _last_warning:
+            return
+
+        _last_warning = message
+
+    print("[TradeExcelRecorder] Recording warning:", message)
+
+
+def clear_warning():
+    global _last_warning
+
+    with _warning_lock:
+        _last_warning = None
+
+
+# ============================================================
+# SQLITE DATABASE
+# ============================================================
 
 def connect_db():
     connection = sqlite3.connect(DB_PATH, timeout=30)
@@ -80,7 +117,10 @@ def initialize_db():
 def save_config(expiry=None, risk_budget=None):
     if risk_budget is not None:
         if not number(risk_budget) or risk_budget <= 0:
-            raise HTTPException(422, "Risk budget must be greater than zero.")
+            raise HTTPException(
+                status_code=422,
+                detail="Risk budget must be greater than zero."
+            )
 
     if expiry is not None:
         expiry = str(expiry).strip() or None
@@ -93,6 +133,7 @@ def save_config(expiry=None, risk_budget=None):
                 INSERT INTO recorder_config
                     (id, expiry, risk_budget, updated_at)
                 VALUES (1, ?, ?, ?)
+
                 ON CONFLICT(id) DO UPDATE SET
                     expiry = excluded.expiry,
                     risk_budget = excluded.risk_budget,
@@ -111,12 +152,17 @@ def save_config(expiry=None, risk_budget=None):
 def read_config():
     with _db_lock:
         with connect_db() as db:
-            row = db.execute(
-                "SELECT expiry, risk_budget FROM recorder_config WHERE id = 1"
-            ).fetchone()
+            row = db.execute("""
+                SELECT expiry, risk_budget
+                FROM recorder_config
+                WHERE id = 1
+            """).fetchone()
 
     if not row:
-        return {"expiry": None, "risk_budget": None}
+        return {
+            "expiry": None,
+            "risk_budget": None,
+        }
 
     return {
         "expiry": row["expiry"],
@@ -127,10 +173,11 @@ def read_config():
 def read_state(key):
     with _db_lock:
         with connect_db() as db:
-            row = db.execute(
-                "SELECT state_json FROM recorder_state WHERE state_key = ?",
-                (key,),
-            ).fetchone()
+            row = db.execute("""
+                SELECT state_json
+                FROM recorder_state
+                WHERE state_key = ?
+            """, (key,)).fetchone()
 
     if not row:
         return {}
@@ -148,6 +195,7 @@ def save_state(key, state):
                 INSERT INTO recorder_state
                     (state_key, state_json, updated_at)
                 VALUES (?, ?, ?)
+
                 ON CONFLICT(state_key) DO UPDATE SET
                     state_json = excluded.state_json,
                     updated_at = excluded.updated_at
@@ -156,13 +204,70 @@ def save_state(key, state):
                 json.dumps(state, ensure_ascii=False),
                 datetime.now(IST).isoformat(),
             ))
+
             db.commit()
+
+
+# ============================================================
+# EXCEL WORKBOOK
+# EXACTLY TWO SHEETS
+# ============================================================
+
+SIGNAL_HEADERS = [
+    "Date",
+    "Time (IST)",
+    "Unique ID",
+    "Action",
+    "Score %",
+    "Base Score %",
+    "Risk Budget",
+    "Expiry",
+    "Strike",
+    "Option Type",
+    "Trading Symbol",
+    "Instrument Token",
+    "Initial LTP",
+    "OI",
+    "OI Change",
+    "OI Change %",
+    "Quote Time",
+]
+
+LTP_HEADERS = [
+    "Date",
+    "Time (IST)",
+    "Unique ID",
+    "Action",
+    "Expiry",
+    "Strike",
+    "Option Type",
+    "Event",
+    "Initial LTP",
+    "Current LTP",
+    "Change %",
+]
 
 
 def workbook_path(now):
     return EXCEL_DIR / (
         f"MarketMindAI_Signals_{now.strftime('%Y-%m-%d')}.xlsx"
     )
+
+
+def style_header(ws):
+    ws.freeze_panes = "A2"
+    ws.auto_filter.ref = ws.dimensions
+
+    for cell in ws[1]:
+        cell.font = Font(
+            bold=True,
+            color="FFFFFF"
+        )
+
+        cell.fill = PatternFill(
+            "solid",
+            fgColor="1F4E78"
+        )
 
 
 def get_workbook(now):
@@ -173,55 +278,46 @@ def get_workbook(now):
     else:
         wb = Workbook()
 
-        first = wb.active
-        first.title = "Signal Entries"
+    # Keep exactly the two required sheets.
+    required_sheets = [
+        "Signal Entries",
+        "LTP Tracking",
+    ]
 
-        first.append([
-            "Date",
-            "Time (IST)",
-            "Unique ID",
-            "Action",
-            "Score %",
-            "Base Score %",
-            "Risk Budget",
-            "Expiry",
-            "Strike",
-            "Option Type",
-            "Trading Symbol",
-            "Instrument Token",
-            "Initial LTP",
-            "OI",
-            "OI Change",
-            "OI Change %",
-            "Quote Time",
-        ])
+    for sheet_name in list(wb.sheetnames):
+        if sheet_name not in required_sheets:
+            del wb[sheet_name]
 
-        second = wb.create_sheet("LTP Tracking")
+    if "Signal Entries" not in wb.sheetnames:
+        if len(wb.sheetnames) == 1 and wb.active.max_row == 1:
+            wb.active.title = "Signal Entries"
+        else:
+            wb.create_sheet("Signal Entries")
 
-        second.append([
-            "Date",
-            "Time (IST)",
-            "Unique ID",
-            "Action",
-            "Expiry",
-            "Strike",
-            "Option Type",
-            "Event",
-            "Initial LTP",
-            "Current LTP",
-            "Change %",
-        ])
+    if "LTP Tracking" not in wb.sheetnames:
+        wb.create_sheet("LTP Tracking")
 
-        for sheet in wb.worksheets:
-            sheet.freeze_panes = "A2"
-            sheet.auto_filter.ref = sheet.dimensions
+    signal_ws = wb["Signal Entries"]
+    ltp_ws = wb["LTP Tracking"]
 
-            for cell in sheet[1]:
-                cell.font = Font(bold=True, color="FFFFFF")
-                cell.fill = PatternFill(
-                    "solid",
-                    fgColor="1F4E78",
-                )
+    if signal_ws.max_row == 1 and signal_ws["A1"].value is None:
+        signal_ws.append(SIGNAL_HEADERS)
+
+    elif signal_ws["A1"].value != SIGNAL_HEADERS[0]:
+        signal_ws.insert_rows(1)
+        for index, header in enumerate(SIGNAL_HEADERS, start=1):
+            signal_ws.cell(row=1, column=index, value=header)
+
+    if ltp_ws.max_row == 1 and ltp_ws["A1"].value is None:
+        ltp_ws.append(LTP_HEADERS)
+
+    elif ltp_ws["A1"].value != LTP_HEADERS[0]:
+        ltp_ws.insert_rows(1)
+        for index, header in enumerate(LTP_HEADERS, start=1):
+            ltp_ws.cell(row=1, column=index, value=header)
+
+    style_header(signal_ws)
+    style_header(ltp_ws)
 
     return wb, path
 
@@ -275,21 +371,57 @@ def append_excel(signal, event=None):
         wb.save(path)
 
 
+def append_initial_ltp(signal):
+    """Record the original LTP for every newly created signal ID."""
+    append_excel(
+        signal,
+        {
+            "event": "INITIAL",
+            "current_ltp": signal["initial_ltp"],
+            "change_pct": 0.0,
+        }
+    )
+
+
+# ============================================================
+# SIGNAL PROCESSING
+# ============================================================
+
 def make_signal_id():
     return str(uuid.uuid4())
 
 
+def reset_signal_state(state_key):
+    state = {
+        "active": False,
+        "last_score": None,
+        "unique_id": None,
+        "initial_ltp": None,
+        "expiry": None,
+        "strike": None,
+        "option_type": None,
+        "trading_symbol": None,
+        "seen_up": False,
+        "seen_down": False,
+    }
+
+    save_state(state_key, state)
+
+
 def process_card(action, card, config, expiry, quote_time):
+
     score = card.get("score")
     base_score = card.get("base_score")
 
-    # With a budget use the dashboard-adjusted score.
-    # Without a budget use the unadjusted base score.
+    # Dashboard adjusted score when Risk Budget is available.
+    # Base score when Risk Budget is not available.
     if config.get("risk_budget") is None:
         score = base_score
 
     if not number(score):
         return
+
+    score = float(score)
 
     state_key = (
         datetime.now(IST).strftime("%Y-%m-%d")
@@ -299,17 +431,19 @@ def process_card(action, card, config, expiry, quote_time):
 
     state = read_state(state_key)
 
+    # --------------------------------------------------------
+    # BELOW 60%: RESET ACTIVE SIGNAL
+    # --------------------------------------------------------
+
     if score < MIN_SCORE:
-        state.update({
-            "active": False,
-            "last_score": None,
-            "unique_id": None,
-            "initial_ltp": None,
-            "seen_up": False,
-            "seen_down": False,
-        })
-        save_state(state_key, state)
+        if state.get("active"):
+            reset_signal_state(state_key)
+
         return
+
+    # --------------------------------------------------------
+    # GET ACTUAL EXECUTION LTP
+    # --------------------------------------------------------
 
     execution = card.get("execution") or {}
     legs = execution.get("legs") or []
@@ -318,28 +452,59 @@ def process_card(action, card, config, expiry, quote_time):
         return
 
     leg = legs[0]
+
     ltp = leg.get("ltp")
 
-    # No fabricated LTP values.
+    # Never fabricate LTP.
     if not number(ltp) or ltp <= 0:
         return
+
+    ltp = float(ltp)
+
+    current_contract = {
+        "expiry": expiry,
+        "strike": leg.get("strike"),
+        "option_type": leg.get("type"),
+        "trading_symbol": leg.get("symbol"),
+    }
+
+    # --------------------------------------------------------
+    # CHECK SAME CONTRACT
+    # --------------------------------------------------------
+
+    same_contract = (
+        state.get("expiry") == current_contract["expiry"]
+        and state.get("strike") == current_contract["strike"]
+        and state.get("option_type") == current_contract["option_type"]
+        and state.get("trading_symbol") == current_contract["trading_symbol"]
+    )
 
     previous_score = state.get("last_score")
     active = state.get("active", False)
 
+    # New entry conditions:
+    # 1. No active signal.
+    # 2. Score changes by >= 5 percentage points.
+    # 3. Contract changes.
     new_entry = (
         not active
         or not number(previous_score)
-        or abs(score - previous_score) >= SCORE_STEP
+        or abs(score - float(previous_score)) >= SCORE_STEP
+        or not same_contract
     )
 
+    # --------------------------------------------------------
+    # CREATE NEW SIGNAL
+    # --------------------------------------------------------
+
     if new_entry:
+
         unique_id = make_signal_id()
 
         signal = {
             "unique_id": unique_id,
             "action": action,
-            "score": round(float(score), 2),
+            "score": round(score, 2),
             "base_score": base_score,
             "risk_budget": config.get("risk_budget"),
             "expiry": expiry,
@@ -347,20 +512,24 @@ def process_card(action, card, config, expiry, quote_time):
             "option_type": leg.get("type"),
             "trading_symbol": leg.get("symbol"),
             "instrument_token": leg.get("instrument_token"),
-            "initial_ltp": float(ltp),
+            "initial_ltp": ltp,
             "oi": leg.get("oi"),
             "oi_change": leg.get("oi_change"),
             "oi_change_pct": leg.get("oi_change_pct"),
             "quote_time": quote_time,
         }
 
+        # Sheet 1: signal entry.
         append_excel(signal)
+
+        # Sheet 2: initial LTP baseline.
+        append_initial_ltp(signal)
 
         state = {
             "active": True,
-            "last_score": round(float(score), 2),
+            "last_score": round(score, 2),
             "unique_id": unique_id,
-            "initial_ltp": float(ltp),
+            "initial_ltp": ltp,
             "expiry": expiry,
             "strike": leg.get("strike"),
             "option_type": leg.get("type"),
@@ -370,18 +539,18 @@ def process_card(action, card, config, expiry, quote_time):
         }
 
         save_state(state_key, state)
+
+        print(
+            f"[TradeExcelRecorder] New signal: "
+            f"{action} | Score: {score:.2f}% | "
+            f"ID: {unique_id} | LTP: {ltp}"
+        )
+
         return
 
-    # Same signal ID: monitor its original contract only.
-    same_contract = (
-        state.get("expiry") == expiry
-        and state.get("strike") == leg.get("strike")
-        and state.get("option_type") == leg.get("type")
-        and state.get("trading_symbol") == leg.get("symbol")
-    )
-
-    if not same_contract:
-        return
+    # --------------------------------------------------------
+    # MONITOR EXISTING SIGNAL
+    # --------------------------------------------------------
 
     initial_ltp = state.get("initial_ltp")
 
@@ -389,7 +558,7 @@ def process_card(action, card, config, expiry, quote_time):
         return
 
     change_pct = (
-        (float(ltp) - initial_ltp) / initial_ltp
+        (ltp - float(initial_ltp)) / float(initial_ltp)
     ) * 100
 
     signal = {
@@ -398,40 +567,70 @@ def process_card(action, card, config, expiry, quote_time):
         "expiry": expiry,
         "strike": leg.get("strike"),
         "option_type": leg.get("type"),
-        "initial_ltp": initial_ltp,
+        "initial_ltp": float(initial_ltp),
     }
 
+    # --------------------------------------------------------
+    # +20% EVENT
+    # --------------------------------------------------------
+
     if change_pct >= LTP_MOVE and not state.get("seen_up"):
+
         append_excel(
             signal,
             {
                 "event": "+20%",
-                "current_ltp": float(ltp),
+                "current_ltp": ltp,
                 "change_pct": round(change_pct, 2),
-            },
+            }
         )
+
         state["seen_up"] = True
 
+        print(
+            f"[TradeExcelRecorder] +20% reached: "
+            f"{action} | ID: {state['unique_id']} | "
+            f"Change: {change_pct:.2f}%"
+        )
+
+    # --------------------------------------------------------
+    # -20% EVENT
+    # --------------------------------------------------------
+
     elif change_pct <= -LTP_MOVE and not state.get("seen_down"):
+
         append_excel(
             signal,
             {
                 "event": "-20%",
-                "current_ltp": float(ltp),
+                "current_ltp": ltp,
                 "change_pct": round(change_pct, 2),
-            },
+            }
         )
+
         state["seen_down"] = True
+
+        print(
+            f"[TradeExcelRecorder] -20% reached: "
+            f"{action} | ID: {state['unique_id']} | "
+            f"Change: {change_pct:.2f}%"
+        )
 
     save_state(state_key, state)
 
 
+# ============================================================
+# BACKGROUND RECORDER
+# ============================================================
+
 class TradeExcelRecorder:
+
     def __init__(self):
         self._stop = threading.Event()
         self._thread = None
 
     def start(self):
+
         initialize_db()
 
         if self._thread and self._thread.is_alive():
@@ -450,33 +649,103 @@ class TradeExcelRecorder:
         print("[TradeExcelRecorder] Started.")
 
     def stop(self):
+
         self._stop.set()
 
         if self._thread and self._thread.is_alive():
-            self._thread.join(timeout=15)
+            self._thread.join(timeout=30)
 
-        print("[TradeExcelRecorder] Stopped.")
+        if self._thread and self._thread.is_alive():
+            print(
+                "[TradeExcelRecorder] Stop requested; "
+                "recording cycle is still finishing."
+            )
+        else:
+            print("[TradeExcelRecorder] Stopped.")
 
     def _run(self):
+
         while not self._stop.is_set():
+
             try:
                 self.record_once()
+                clear_warning()
+
             except Exception as exc:
-                print(
-                    "[TradeExcelRecorder] Recording warning:",
-                    str(exc),
-                )
+                log_warning(exc)
 
             self._stop.wait(POLL_SECONDS)
 
+    # --------------------------------------------------------
+    # EXPIRY VALIDATION
+    # --------------------------------------------------------
+
+    def get_valid_expiry(self, config):
+
+        from .option_chain import get_upcoming_expiries
+
+        valid_expiries = get_upcoming_expiries("NIFTY")
+
+        if not valid_expiries:
+            log_warning(
+                "No valid NIFTY expiry returned by Kite."
+            )
+            return None
+
+        requested_expiry = config.get("expiry")
+
+        expiry_map = {
+            str(item).strip().upper(): item
+            for item in valid_expiries
+        }
+
+        selected_expiry = None
+
+        if requested_expiry:
+            selected_expiry = expiry_map.get(
+                str(requested_expiry).strip().upper()
+            )
+
+        # Use the nearest listed expiry if saved expiry is invalid.
+        if selected_expiry is None:
+
+            selected_expiry = valid_expiries[0]
+
+            print(
+                "[TradeExcelRecorder] Invalid/missing expiry:",
+                repr(requested_expiry),
+                "-> Using valid expiry:",
+                selected_expiry,
+            )
+
+            # Save the corrected expiry and preserve risk budget.
+            save_config(
+                expiry=selected_expiry,
+                risk_budget=config.get("risk_budget"),
+            )
+
+            config["expiry"] = selected_expiry
+
+        return selected_expiry
+
+    # --------------------------------------------------------
+    # ONE RECORDING CYCLE
+    # --------------------------------------------------------
+
     def record_once(self):
+
         config = read_config()
 
-        # Lazy import avoids circular imports at module startup.
+        # Lazy imports avoid circular imports.
         from .trade_setups import setups
 
+        selected_expiry = self.get_valid_expiry(config)
+
+        if not selected_expiry:
+            return
+
         result = setups(
-            expiry=config.get("expiry"),
+            expiry=selected_expiry,
             risk_budget=config.get("risk_budget"),
         )
 
@@ -487,12 +756,17 @@ class TradeExcelRecorder:
             return
 
         quote_time = result.get("quote_time")
+
         if not number(quote_time):
             return
 
-        expiry = result.get("expiry") or config.get("expiry")
+        actual_expiry = (
+            result.get("expiry")
+            or selected_expiry
+        )
 
         for action in ("CALL BUY", "PUT BUY"):
+
             card = next(
                 (
                     item
@@ -506,24 +780,38 @@ class TradeExcelRecorder:
                 continue
 
             process_card(
-                action,
-                card,
-                config,
-                expiry,
-                quote_time,
+                action=action,
+                card=card,
+                config=config,
+                expiry=actual_expiry,
+                quote_time=quote_time,
             )
 
+
+# ============================================================
+# SINGLETON
+# ============================================================
 
 trade_excel_recorder = TradeExcelRecorder()
 
 
+# ============================================================
+# API CONFIGURATION
+# ============================================================
+
 class RecorderConfig(BaseModel):
+
     expiry: str | None = None
-    risk_budget: float | None = Field(default=None, gt=0)
+
+    risk_budget: float | None = Field(
+        default=None,
+        gt=0,
+    )
 
 
 @router.post("/api/signals/trade-setups/recorder-config")
 def update_recorder_config(payload: RecorderConfig):
+
     return save_config(
         expiry=payload.expiry,
         risk_budget=payload.risk_budget,
@@ -532,4 +820,5 @@ def update_recorder_config(payload: RecorderConfig):
 
 @router.get("/api/signals/trade-setups/recorder-config")
 def get_recorder_config():
+
     return read_config()
