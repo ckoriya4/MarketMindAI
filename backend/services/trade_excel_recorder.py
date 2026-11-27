@@ -113,6 +113,10 @@ def initialize_db():
             db.commit()
 
 
+# ============================================================
+# SAVE COMPLETE CONFIG
+# ============================================================
+
 def save_config(expiry=None, risk_budget=None):
 
     if risk_budget is not None:
@@ -142,12 +146,58 @@ def save_config(expiry=None, risk_budget=None):
 
             db.commit()
 
-    return {
+    result = {
         "saved": True,
         "expiry": expiry,
         "risk_budget": risk_budget,
     }
 
+    print(
+        "[TradeExcelRecorder] Config saved | "
+        f"Expiry: {expiry} | "
+        f"Risk Budget: {risk_budget}"
+    )
+
+    return result
+
+
+# ============================================================
+# UPDATE EXPIRY ONLY
+# IMPORTANT:
+# Do not overwrite the current risk_budget.
+# ============================================================
+
+def save_expiry_only(expiry):
+
+    if expiry is not None:
+        expiry = str(expiry).strip() or None
+
+    now = datetime.now(IST).isoformat()
+
+    with _db_lock:
+        with connect_db() as db:
+            db.execute("""
+                INSERT INTO recorder_config
+                    (id, expiry, risk_budget, updated_at)
+                VALUES (1, ?, NULL, ?)
+
+                ON CONFLICT(id) DO UPDATE SET
+                    expiry = excluded.expiry,
+                    updated_at = excluded.updated_at
+            """, (expiry, now))
+
+            db.commit()
+
+    print(
+        "[TradeExcelRecorder] Expiry updated without "
+        "changing Risk Budget:",
+        expiry
+    )
+
+
+# ============================================================
+# READ CONFIG
+# ============================================================
 
 def read_config():
 
@@ -170,6 +220,10 @@ def read_config():
         "risk_budget": row["risk_budget"],
     }
 
+
+# ============================================================
+# SIGNAL STATE
+# ============================================================
 
 def read_state(key):
 
@@ -284,7 +338,6 @@ def get_workbook(now):
     else:
         wb = Workbook()
 
-    # Keep exactly the two required sheets.
     required_sheets = [
         "Signal Entries",
         "LTP Tracking",
@@ -457,9 +510,15 @@ def process_card(action, card, config, expiry, quote_time):
     dashboard_score = card.get("score")
     base_score = card.get("base_score")
 
-    # Dashboard adjusted score when Risk Budget is available.
-    # Base score when Risk Budget is not available.
-    if config.get("risk_budget") is None:
+    risk_budget = config.get("risk_budget")
+
+    # No Risk Budget:
+    # Use the same Base Score used by the dashboard.
+    #
+    # Risk Budget available:
+    # Use risk-adjusted dashboard score.
+
+    if risk_budget is None:
         score = base_score
     else:
         score = dashboard_score
@@ -468,7 +527,7 @@ def process_card(action, card, config, expiry, quote_time):
         f"[TradeExcelRecorder] Checking {action} | "
         f"Dashboard Score: {dashboard_score} | "
         f"Base Score: {base_score} | "
-        f"Risk Budget: {config.get('risk_budget')} | "
+        f"Risk Budget: {risk_budget} | "
         f"Selected Score: {score}"
     )
 
@@ -476,7 +535,7 @@ def process_card(action, card, config, expiry, quote_time):
 
         print(
             f"[TradeExcelRecorder] Skipped {action}: "
-            f"Selected score is missing or invalid."
+            "Selected score is missing or invalid."
         )
 
         return
@@ -524,7 +583,7 @@ def process_card(action, card, config, expiry, quote_time):
 
         print(
             f"[TradeExcelRecorder] Skipped {action}: "
-            f"Execution legs are missing."
+            "Execution legs are missing."
         )
 
         return
@@ -591,7 +650,7 @@ def process_card(action, card, config, expiry, quote_time):
             "action": action,
             "score": round(score, 2),
             "base_score": base_score,
-            "risk_budget": config.get("risk_budget"),
+            "risk_budget": risk_budget,
             "expiry": expiry,
             "strike": leg.get("strike"),
             "option_type": leg.get("type"),
@@ -726,10 +785,7 @@ class TradeExcelRecorder:
         initialize_db()
 
         # Create today's Excel file immediately.
-        # Does not wait for a 60% signal.
-
         try:
-
             create_daily_workbook()
 
         except Exception as exc:
@@ -831,11 +887,9 @@ class TradeExcelRecorder:
                 selected_expiry,
             )
 
-            # Save corrected expiry and preserve risk budget.
-            save_config(
-                expiry=selected_expiry,
-                risk_budget=config.get("risk_budget"),
-            )
+            # Update expiry ONLY.
+            # Do not overwrite risk_budget.
+            save_expiry_only(selected_expiry)
 
             config["expiry"] = selected_expiry
 
@@ -847,10 +901,11 @@ class TradeExcelRecorder:
 
     def record_once(self):
 
+        # Always read latest configuration from SQLite.
         config = read_config()
 
         print(
-            "[TradeExcelRecorder] Recording cycle | "
+            "[TradeExcelRecorder] Config loaded from SQLite | "
             f"Expiry: {config.get('expiry')} | "
             f"Risk Budget: {config.get('risk_budget')}"
         )
@@ -869,6 +924,7 @@ class TradeExcelRecorder:
 
             return
 
+        # Use latest risk budget from config.
         result = setups(
             expiry=selected_expiry,
             risk_budget=config.get("risk_budget"),
@@ -980,10 +1036,18 @@ class RecorderConfig(BaseModel):
 @router.post("/api/signals/trade-setups/recorder-config")
 def update_recorder_config(payload: RecorderConfig):
 
-    return save_config(
+    result = save_config(
         expiry=payload.expiry,
         risk_budget=payload.risk_budget,
     )
+
+    print(
+        "[TradeExcelRecorder] Config updated | "
+        f"Expiry: {result['expiry']} | "
+        f"Risk Budget: {result['risk_budget']}"
+    )
+
+    return result
 
 
 @router.get("/api/signals/trade-setups/recorder-config")
