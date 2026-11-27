@@ -562,7 +562,8 @@ def process_card(action, card, config, expiry, quote_time):
 
         print(
             f"[TradeExcelRecorder] Skipped {action}: "
-            "Execution legs are missing."
+            "Execution legs are missing; score trigger will be "
+            "checked again on the next fresh polling cycle."
         )
 
         return
@@ -574,7 +575,8 @@ def process_card(action, card, config, expiry, quote_time):
 
         print(
             f"[TradeExcelRecorder] Skipped {action}: "
-            f"Invalid execution LTP: {ltp}"
+            f"Invalid execution LTP: {ltp}; score trigger will be "
+            "checked again on the next fresh polling cycle."
         )
 
         return
@@ -600,15 +602,49 @@ def process_card(action, card, config, expiry, quote_time):
 
     # New entry conditions:
     # 1. No active signal.
-    # 2. Score changes by >= 5 percentage points.
+    # 2. Base Score changes by >= 5 percentage points
+    #    compared with the LAST RECORDED ENTRY score.
     # 3. Contract changes.
+    #
+    # The comparison is absolute, so increases and decreases
+    # both trigger a new entry. Exactly 5.00 also triggers.
+
+    score_difference = (
+        abs(score - float(previous_score))
+        if number(previous_score)
+        else None
+    )
+
+    score_changed = (
+        score_difference is not None
+        and score_difference >= SCORE_STEP
+    )
 
     new_entry = (
         not active
         or not number(previous_score)
-        or abs(score - float(previous_score)) >= SCORE_STEP
+        or score_changed
         or not same_contract
     )
+
+    print(
+        f"[TradeExcelRecorder] Entry decision | {action} | "
+        f"Previous Recorded Base Score: {previous_score} | "
+        f"Current Base Score: {score:.2f} | "
+        f"Difference: "
+        f"{score_difference:.2f}"
+        f"{'%' if score_difference is not None else 'N/A'} | "
+        f"Required: >= {SCORE_STEP:.2f} | "
+        f"Active: {active} | Same Contract: {same_contract} | "
+        f"New Entry: {new_entry}"
+    )
+
+    if not new_entry:
+        print(
+            f"[TradeExcelRecorder] No new {action} entry: "
+            f"score difference is below {SCORE_STEP:.2f} "
+            "and the contract has not changed."
+        )
 
     # --------------------------------------------------------
     # CREATE NEW SIGNAL
