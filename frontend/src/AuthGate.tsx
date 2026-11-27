@@ -1,3 +1,4 @@
+
 import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
 import { apiUrl } from "./config/api";
@@ -12,127 +13,484 @@ type User = {
     phone_verified: boolean;
 };
 
+type AuthResponse = {
+    access_token: string;
+    token_type?: string;
+    user: User;
+};
+
 const TOKEN_KEY = "marketmind_access_token";
 
 async function api(path: string, body?: unknown, token?: string) {
     const response = await fetch(apiUrl(path), {
-        method: body ? "POST" : "GET",
+        method: body !== undefined ? "POST" : "GET",
         headers: {
             "Content-Type": "application/json",
             ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
-        ...(body ? { body: JSON.stringify(body) } : {}),
+        ...(body !== undefined
+            ? { body: JSON.stringify(body) }
+            : {}),
     });
+
     const data = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(data.detail || `Request failed (${response.status})`);
+
+    if (!response.ok) {
+        let errorMessage = `Request failed (${response.status})`;
+
+        if (Array.isArray(data.detail)) {
+            errorMessage = data.detail
+                .map((item: {
+                    loc?: unknown[];
+                    msg?: string;
+                    type?: string;
+                }) => {
+                    const field = Array.isArray(item.loc)
+                        ? item.loc.filter(Boolean).join(" → ")
+                        : "Field";
+
+                    return `${field}: ${item.msg || "Invalid value"}`;
+                })
+                .join("\n");
+        } else if (typeof data.detail === "string") {
+            errorMessage = data.detail;
+        }
+
+        throw new Error(errorMessage);
+    }
+
     return data;
 }
 
-export default function AuthGate({ children }: { children: React.ReactNode }) {
+export default function AuthGate({
+    children,
+}: {
+    children: React.ReactNode;
+}) {
     const [mode, setMode] = useState<"login" | "register" | "verify">("login");
+
     const [name, setName] = useState("");
     const [email, setEmail] = useState("");
     const [phone, setPhone] = useState("+91");
     const [password, setPassword] = useState("");
+
     const [verifyVia, setVerifyVia] = useState<"email" | "phone">("email");
+
     const [otp, setOtp] = useState("");
-    const [token, setToken] = useState(() => localStorage.getItem(TOKEN_KEY) || "");
+
+    const [token, setToken] = useState(
+        () => localStorage.getItem(TOKEN_KEY) || ""
+    );
+
     const [user, setUser] = useState<User | null>(null);
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState("");
     const [message, setMessage] = useState("");
 
     useEffect(() => {
-        if (!token) return;
+        if (!token) {
+            setUser(null);
+            return;
+        }
+
+        let cancelled = false;
+
         api("/api/auth/me", undefined, token)
-            .then(data => setUser(data.user))
+            .then((data) => {
+                if (!cancelled) {
+                    setUser(data.user);
+                }
+            })
             .catch(() => {
-                localStorage.removeItem(TOKEN_KEY);
-                setToken("");
+                if (!cancelled) {
+                    localStorage.removeItem(TOKEN_KEY);
+                    setToken("");
+                    setUser(null);
+                }
             });
+
+        return () => {
+            cancelled = true;
+        };
     }, [token]);
 
-    const saveSession = (data: { access_token: string; user: User }) => {
+    const saveSession = (data: AuthResponse) => {
         localStorage.setItem(TOKEN_KEY, data.access_token);
         setToken(data.access_token);
         setUser(data.user);
     };
 
-    const submit = async (event: FormEvent) => {
+    const submit = async (event: FormEvent<HTMLFormElement>) => {
         event.preventDefault();
-        setBusy(true); setError(""); setMessage("");
+
+        setBusy(true);
+        setError("");
+        setMessage("");
+
         try {
             if (mode === "register") {
+                const cleanName = name.trim();
+                const cleanEmail = email.trim().toLowerCase();
+                const cleanPhone = phone.trim().replace(/[\s-]/g, "");
+
+                if (cleanName.length < 2) {
+                    throw new Error("Please enter your full name.");
+                }
+
+                if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+                    throw new Error("Please enter a valid email address.");
+                }
+
+                if (!/^\+[1-9]\d{7,14}$/.test(cleanPhone)) {
+                    throw new Error(
+                        "Enter a valid international phone number. Example: +919876543210"
+                    );
+                }
+
+                if (password.length < 10) {
+                    throw new Error(
+                        "Password must contain at least 10 characters."
+                    );
+                }
+
                 await api("/api/auth/register", {
-                    full_name: name, email, phone, password, verify_via: verifyVia,
+                    full_name: cleanName,
+                    email: cleanEmail,
+                    phone: cleanPhone,
+                    password,
+                    verify_via: verifyVia,
                 });
+
+                setEmail(cleanEmail);
+                setPhone(cleanPhone);
+                setOtp("");
                 setMode("verify");
-                setMessage(`Verification code sent by ${verifyVia}.`);
+
+                setMessage(
+                    `Verification code sent by ${verifyVia === "email" ? "Email" : "Phone"}.`
+                );
             } else if (mode === "verify") {
-                const data = await api("/api/auth/verify", { email, otp });
+                if (!/^\d{6}$/.test(otp)) {
+                    throw new Error("Enter a valid 6-digit verification code.");
+                }
+
+                const data = await api("/api/auth/verify", {
+                    email: email.trim().toLowerCase(),
+                    otp,
+                });
+
                 saveSession(data);
             } else {
-                const data = await api("/api/auth/login", { identifier: email, password });
+                const identifier = email.trim();
+
+                if (!identifier) {
+                    throw new Error("Enter your email or phone number.");
+                }
+
+                if (!password) {
+                    throw new Error("Enter your password.");
+                }
+
+                const data = await api("/api/auth/login", {
+                    identifier,
+                    password,
+                });
+
                 saveSession(data);
             }
         } catch (e) {
-            setError(e instanceof Error ? e.message : "Something went wrong.");
+            setError(
+                e instanceof Error
+                    ? e.message
+                    : "Something went wrong. Please try again."
+            );
         } finally {
             setBusy(false);
         }
     };
 
     const logout = async () => {
-        try { await api("/api/auth/logout", {}, token); } catch { /* local logout still proceeds */ }
+        try {
+            await api("/api/auth/logout", {}, token);
+        } catch {
+            // Local logout still proceeds.
+        }
+
         localStorage.removeItem(TOKEN_KEY);
-        setToken(""); setUser(null); setMode("login");
+        setToken("");
+        setUser(null);
+        setPassword("");
+        setMode("login");
+        setError("");
+        setMessage("");
+    };
+
+    const changeMode = (nextMode: "login" | "register") => {
+        setMode(nextMode);
+        setError("");
+        setMessage("");
+        setPassword("");
+        setOtp("");
     };
 
     if (token && user) {
-        return <>{children}<button className="mm-logout" onClick={logout}>Logout · {user.full_name}</button></>;
+        return (
+            <>
+                {children}
+
+                <button
+                    className="mm-logout"
+                    onClick={logout}
+                    type="button"
+                >
+                    Logout · {user.full_name}
+                </button>
+            </>
+        );
     }
-    if (token && !user) return <div className="mm-auth-loading">Checking your session…</div>;
+
+    if (token && !user) {
+        return (
+            <div className="mm-auth-loading">
+                Checking your session…
+            </div>
+        );
+    }
 
     return (
         <div className="mm-auth-shell">
             <form className="mm-auth-card" onSubmit={submit}>
-                <div className="mm-auth-brand">◈ MarketMind AI</div>
-                <h1>{mode === "register" ? "Create your account" : mode === "verify" ? "Verify your account" : "Welcome back"}</h1>
-                <p className="mm-auth-sub">Secure access to your MarketMind AI dashboard</p>
+                <div className="mm-auth-brand">
+                    ◈ MarketMind AI
+                </div>
 
-                {mode === "register" && <>
-                    <label>Full name<input value={name} onChange={e => setName(e.target.value)} required minLength={2} /></label>
-                    <label>Email address<input type="email" value={email} onChange={e => setEmail(e.target.value)} required /></label>
-                    <label>Phone number (international format)<input value={phone} onChange={e => setPhone(e.target.value)} required placeholder="+919876543210" /></label>
-                    <label>Password<input type="password" value={password} onChange={e => setPassword(e.target.value)} required minLength={10} /></label>
-                    <label>Verify using
-                        <select value={verifyVia} onChange={e => setVerifyVia(e.target.value as "email" | "phone")}>
-                            <option value="email">Email OTP</option><option value="phone">Phone OTP (Twilio)</option>
-                        </select>
-                    </label>
-                </>}
+                <h1>
+                    {mode === "register"
+                        ? "Create your account"
+                        : mode === "verify"
+                            ? "Verify your account"
+                            : "Welcome back"}
+                </h1>
 
-                {mode === "login" && <>
-                    <label>Email or phone number<input value={email} onChange={e => setEmail(e.target.value)} required placeholder="Email or +919876543210" /></label>
-                    <label>Password<input type="password" value={password} onChange={e => setPassword(e.target.value)} required /></label>
-                </>}
+                <p className="mm-auth-sub">
+                    Secure access to your MarketMind AI dashboard
+                </p>
 
-                {mode === "verify" && <>
-                    <label>Registered email<input type="email" value={email} onChange={e => setEmail(e.target.value)} required /></label>
-                    <label>6-digit verification code<input inputMode="numeric" autoComplete="one-time-code" value={otp} onChange={e => setOtp(e.target.value.replace(/\D/g, "").slice(0, 6))} required pattern="\d{6}" /></label>
-                    <p className="mm-auth-sub">The code expires after 10 minutes.</p>
-                </>}
+                {mode === "register" && (
+                    <>
+                        <label>
+                            Full name
 
-                {error && <div className="mm-auth-error">{error}</div>}
-                {message && <div className="mm-auth-message">{message}</div>}
-                <button className="mm-auth-submit" disabled={busy}>{busy ? "Please wait…" : mode === "register" ? "Register & send OTP" : mode === "verify" ? "Verify & continue" : "Login"}</button>
+                            <input
+                                type="text"
+                                value={name}
+                                onChange={(e) => setName(e.target.value)}
+                                required
+                                minLength={2}
+                                maxLength={100}
+                                autoComplete="name"
+                                placeholder="Enter your full name"
+                            />
+                        </label>
+
+                        <label>
+                            Email address
+
+                            <input
+                                type="email"
+                                value={email}
+                                onChange={(e) => setEmail(e.target.value)}
+                                required
+                                autoComplete="email"
+                                placeholder="example@gmail.com"
+                            />
+                        </label>
+
+                        <label>
+                            Phone number (international format)
+
+                            <input
+                                type="tel"
+                                value={phone}
+                                onChange={(e) => setPhone(e.target.value)}
+                                required
+                                autoComplete="tel"
+                                placeholder="+919876543210"
+                            />
+
+                            <small>
+                                Include country code. Example: +919876543210
+                            </small>
+                        </label>
+
+                        <label>
+                            Password
+
+                            <input
+                                type="password"
+                                value={password}
+                                onChange={(e) => setPassword(e.target.value)}
+                                required
+                                minLength={10}
+                                maxLength={128}
+                                autoComplete="new-password"
+                                placeholder="Minimum 10 characters"
+                            />
+                        </label>
+
+                        <label>
+                            Verify using
+
+                            <select
+                                value={verifyVia}
+                                onChange={(e) =>
+                                    setVerifyVia(
+                                        e.target.value as "email" | "phone"
+                                    )
+                                }
+                            >
+                                <option value="email">
+                                    Email OTP
+                                </option>
+
+                                <option value="phone">
+                                    Phone OTP (Twilio)
+                                </option>
+                            </select>
+                        </label>
+                    </>
+                )}
+
+                {mode === "login" && (
+                    <>
+                        <label>
+                            Email or phone number
+
+                            <input
+                                type="text"
+                                value={email}
+                                onChange={(e) => setEmail(e.target.value)}
+                                required
+                                autoComplete="username"
+                                placeholder="Email or +919876543210"
+                            />
+                        </label>
+
+                        <label>
+                            Password
+
+                            <input
+                                type="password"
+                                value={password}
+                                onChange={(e) => setPassword(e.target.value)}
+                                required
+                                autoComplete="current-password"
+                                placeholder="Enter your password"
+                            />
+                        </label>
+                    </>
+                )}
+
+                {mode === "verify" && (
+                    <>
+                        <p className="mm-auth-sub">
+                            Verification code sent using{" "}
+                            <strong>
+                                {verifyVia === "email" ? "Email" : "Phone"}
+                            </strong>.
+                        </p>
+
+                        <label>
+                            Registered email
+
+                            <input
+                                type="email"
+                                value={email}
+                                onChange={(e) => setEmail(e.target.value)}
+                                required
+                                autoComplete="email"
+                            />
+                        </label>
+
+                        <label>
+                            6-digit verification code
+
+                            <input
+                                type="text"
+                                inputMode="numeric"
+                                autoComplete="one-time-code"
+                                value={otp}
+                                onChange={(e) =>
+                                    setOtp(
+                                        e.target.value
+                                            .replace(/\D/g, "")
+                                            .slice(0, 6)
+                                    )
+                                }
+                                required
+                                pattern="[0-9]{6}"
+                                maxLength={6}
+                                placeholder="Enter 6-digit OTP"
+                            />
+                        </label>
+
+                        <p className="mm-auth-sub">
+                            The code expires after 10 minutes.
+                        </p>
+                    </>
+                )}
+
+                {error && (
+                    <div className="mm-auth-error">
+                        {error}
+                    </div>
+                )}
+
+                {message && (
+                    <div className="mm-auth-message">
+                        {message}
+                    </div>
+                )}
+
+                <button
+                    className="mm-auth-submit"
+                    type="submit"
+                    disabled={busy}
+                >
+                    {busy
+                        ? "Please wait…"
+                        : mode === "register"
+                            ? "Register & send OTP"
+                            : mode === "verify"
+                                ? "Verify & continue"
+                                : "Login"}
+                </button>
 
                 {mode !== "verify" ? (
-                    <button type="button" className="mm-auth-link" onClick={() => { setMode(mode === "login" ? "register" : "login"); setError(""); setMessage(""); }}>
-                        {mode === "login" ? "New user? Create an account" : "Already registered? Login"}
+                    <button
+                        type="button"
+                        className="mm-auth-link"
+                        onClick={() =>
+                            changeMode(
+                                mode === "login" ? "register" : "login"
+                            )
+                        }
+                    >
+                        {mode === "login"
+                            ? "New user? Create an account"
+                            : "Already registered? Login"}
                     </button>
                 ) : (
-                    <button type="button" className="mm-auth-link" onClick={() => { setMode("register"); setOtp(""); }}>
+                    <button
+                        type="button"
+                        className="mm-auth-link"
+                        onClick={() => {
+                            setMode("register");
+                            setOtp("");
+                            setError("");
+                            setMessage("");
+                        }}
+                    >
                         Back to registration
                     </button>
                 )}
