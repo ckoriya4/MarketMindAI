@@ -2,17 +2,11 @@
 import logging
 import secrets
 
-import psycopg
+from fastapi import APIRouter, Depends, Header, HTTPException
 from psycopg.errors import UniqueViolation
 
-from fastapi import APIRouter, Depends, Header, HTTPException
-
 from ..services.database import get_db_connection
-from ..services.notification_service import (
-    send_email_otp,
-    send_twilio_verification,
-    verify_twilio_code,
-)
+from ..services.notification_service import send_email_otp
 
 from .schemas import (
     RegisterRequest,
@@ -43,9 +37,7 @@ router = APIRouter(
 # CURRENT USER
 # =========================================================
 
-def current_user(
-    authorization: str = Header(default="")
-):
+def current_user(authorization: str = Header(default="")):
 
     if not authorization.startswith("Bearer "):
         raise HTTPException(
@@ -57,7 +49,6 @@ def current_user(
 
     try:
         user_id = decode_access_token(token)
-
     except Exception:
         raise HTTPException(
             status_code=401,
@@ -65,9 +56,7 @@ def current_user(
         ) from None
 
     try:
-
         with get_db_connection() as conn:
-
             user = conn.execute(
                 """
                 SELECT
@@ -86,7 +75,6 @@ def current_user(
 
     except Exception:
         logger.exception("Database error while loading current user")
-
         raise HTTPException(
             status_code=503,
             detail="Unable to verify user session. Please try again."
@@ -102,7 +90,7 @@ def current_user(
 
 
 # =========================================================
-# REGISTER
+# REGISTER - EMAIL OTP ONLY
 # =========================================================
 
 @router.post("/register")
@@ -118,18 +106,7 @@ def register(data: RegisterRequest):
             detail="Full name is required."
         )
 
-    if data.verify_via not in ("email", "phone"):
-        raise HTTPException(
-            status_code=422,
-            detail="Verification method must be email or phone."
-        )
-
-    # -----------------------------------------------------
-    # CHECK EXISTING USER
-    # -----------------------------------------------------
-
     try:
-
         with get_db_connection() as conn:
 
             existing = conn.execute(
@@ -148,10 +125,6 @@ def register(data: RegisterRequest):
                     status_code=409,
                     detail="Email or phone number is already registered."
                 )
-
-            # -------------------------------------------------
-            # CREATE USER
-            # -------------------------------------------------
 
             password_hash = hash_password(data.password)
 
@@ -183,10 +156,6 @@ def register(data: RegisterRequest):
 
             user_id = row["id"]
 
-            # -------------------------------------------------
-            # CREATE OTP
-            # -------------------------------------------------
-
             otp = make_otp()
             salt = secrets.token_hex(16)
 
@@ -205,7 +174,7 @@ def register(data: RegisterRequest):
                 VALUES (
                     %s,
                     'register',
-                    %s,
+                    'email',
                     %s,
                     %s,
                     NOW() + INTERVAL '10 minutes',
@@ -215,7 +184,6 @@ def register(data: RegisterRequest):
                 """,
                 (
                     user_id,
-                    data.verify_via,
                     otp_digest(otp, salt),
                     salt
                 )
@@ -229,7 +197,6 @@ def register(data: RegisterRequest):
             "Registration rejected because email or phone already exists: %s",
             email
         )
-
         raise HTTPException(
             status_code=409,
             detail="Email or phone number is already registered."
@@ -240,50 +207,32 @@ def register(data: RegisterRequest):
             "Registration database operation failed for email: %s",
             email
         )
-
         raise HTTPException(
             status_code=500,
             detail="Registration database operation failed. Check backend logs."
         ) from None
 
     # -----------------------------------------------------
-    # SEND VERIFICATION CODE
+    # SEND EMAIL OTP USING RESEND
     # -----------------------------------------------------
 
     try:
-
-        if data.verify_via == "email":
-
-            send_email_otp(
-                email,
-                otp
-            )
-
-        else:
-
-            send_twilio_verification(
-                phone,
-                otp
-            )
+        send_email_otp(email, otp)
 
     except Exception:
-
         logger.exception(
-            "OTP delivery failed for user ID: %s",
+            "Email OTP delivery failed for user ID: %s",
             user_id
         )
 
-        # Clean up unverified registration.
+        # Remove incomplete registration if email delivery fails.
         try:
-
             with get_db_connection() as conn:
-
                 conn.execute(
                     """
                     DELETE FROM mm_users
                     WHERE id = %s
                       AND email_verified = FALSE
-                      AND phone_verified = FALSE
                     """,
                     (user_id,)
                 )
@@ -296,17 +245,17 @@ def register(data: RegisterRequest):
 
         raise HTTPException(
             status_code=503,
-            detail="Could not send verification code. Check email or Twilio configuration."
+            detail="Could not send verification email. Please check email service configuration."
         ) from None
 
     return {
-        "message": "Verification code sent.",
-        "verification_method": data.verify_via,
+        "message": "Verification code sent to your email.",
+        "verification_method": "email"
     }
 
 
 # =========================================================
-# VERIFY REGISTRATION
+# VERIFY REGISTRATION - EMAIL ONLY
 # =========================================================
 
 @router.post("/verify")
@@ -315,15 +264,11 @@ def verify_registration(data: VerifyRegistrationRequest):
     email = str(data.email).lower().strip()
 
     try:
-
         with get_db_connection() as conn:
-
             row = conn.execute(
                 """
                 SELECT
                     u.id,
-                    u.phone,
-                    o.channel,
                     o.otp_hash,
                     o.salt,
                     o.expires_at,
@@ -333,6 +278,8 @@ def verify_registration(data: VerifyRegistrationRequest):
                     ON o.user_id = u.id
                 WHERE lower(u.email) = lower(%s)
                   AND o.purpose = 'register'
+                  AND o.channel = 'email'
+                  AND u.email_verified = FALSE
                 ORDER BY o.created_at DESC
                 LIMIT 1
                 """,
@@ -340,126 +287,78 @@ def verify_registration(data: VerifyRegistrationRequest):
             ).fetchone()
 
     except Exception:
-
         logger.exception(
             "Database error while loading registration OTP"
         )
-
         raise HTTPException(
             status_code=503,
             detail="Unable to access verification records."
         ) from None
 
     if not row:
-
         raise HTTPException(
             status_code=400,
-            detail="No pending registration found."
+            detail="No pending email verification found."
         )
 
     if row["attempts"] >= 5:
-
         raise HTTPException(
             status_code=429,
-            detail="Too many incorrect attempts. Request a new code."
+            detail="Too many incorrect attempts. Please register again."
         )
 
     # -----------------------------------------------------
-    # VERIFY OTP
+    # CHECK EMAIL OTP
     # -----------------------------------------------------
 
-    valid = False
-
-    if row["channel"] == "email":
-
-        valid = (
-            row["expires_at"] > utc_now()
-            and secrets.compare_digest(
-                otp_digest(data.otp, row["salt"]),
-                row["otp_hash"]
-            )
+    valid = (
+        row["expires_at"] > utc_now()
+        and secrets.compare_digest(
+            otp_digest(data.otp, row["salt"]),
+            row["otp_hash"]
         )
-
-    else:
-
-        try:
-
-            valid = (
-                row["expires_at"] > utc_now()
-                and verify_twilio_code(
-                    row["phone"],
-                    data.otp
-                )
-            )
-
-        except Exception:
-
-            logger.exception(
-                "Twilio verification failed for user ID: %s",
-                row["id"]
-            )
-
-            raise HTTPException(
-                status_code=503,
-                detail="Twilio verification service unavailable."
-            ) from None
+    )
 
     if not valid:
 
         try:
-
             with get_db_connection() as conn:
-
                 conn.execute(
                     """
                     UPDATE mm_auth_otps
                     SET attempts = attempts + 1
                     WHERE user_id = %s
                       AND purpose = 'register'
+                      AND channel = 'email'
                     """,
                     (row["id"],)
                 )
 
         except Exception:
-
             logger.exception(
                 "Failed to update OTP attempt count"
             )
 
         raise HTTPException(
             status_code=400,
-            detail="Invalid or expired verification code."
+            detail="Invalid or expired email verification code."
         )
 
     # -----------------------------------------------------
-    # ACTIVATE VERIFIED USER
+    # ACTIVATE EMAIL-VERIFIED USER
     # -----------------------------------------------------
 
     try:
-
         with get_db_connection() as conn:
 
-            if row["channel"] == "email":
-
-                conn.execute(
-                    """
-                    UPDATE mm_users
-                    SET email_verified = TRUE
-                    WHERE id = %s
-                    """,
-                    (row["id"],)
-                )
-
-            else:
-
-                conn.execute(
-                    """
-                    UPDATE mm_users
-                    SET phone_verified = TRUE
-                    WHERE id = %s
-                    """,
-                    (row["id"],)
-                )
+            conn.execute(
+                """
+                UPDATE mm_users
+                SET email_verified = TRUE
+                WHERE id = %s
+                """,
+                (row["id"],)
+            )
 
             conn.execute(
                 """
@@ -486,19 +385,16 @@ def verify_registration(data: VerifyRegistrationRequest):
             ).fetchone()
 
     except Exception:
-
         logger.exception(
-            "Failed to activate verified user: %s",
+            "Failed to activate email-verified user: %s",
             row["id"]
         )
-
         raise HTTPException(
             status_code=503,
             detail="Could not complete registration."
         ) from None
 
     if not user:
-
         raise HTTPException(
             status_code=500,
             detail="User record not found after verification."
@@ -512,7 +408,7 @@ def verify_registration(data: VerifyRegistrationRequest):
 
 
 # =========================================================
-# LOGIN
+# LOGIN - EMAIL VERIFICATION REQUIRED
 # =========================================================
 
 @router.post("/login")
@@ -521,9 +417,7 @@ def login(data: LoginRequest):
     identifier = data.identifier.strip()
 
     try:
-
         with get_db_connection() as conn:
-
             user = conn.execute(
                 """
                 SELECT
@@ -547,11 +441,7 @@ def login(data: LoginRequest):
             ).fetchone()
 
     except Exception:
-
-        logger.exception(
-            "Login database lookup failed"
-        )
-
+        logger.exception("Login database lookup failed")
         raise HTTPException(
             status_code=503,
             detail="Login service temporarily unavailable."
@@ -565,20 +455,16 @@ def login(data: LoginRequest):
             user["password_hash"]
         )
     ):
-
         raise HTTPException(
             status_code=401,
             detail="Invalid email/phone or password."
         )
 
-    if not (
-        user["email_verified"]
-        or user["phone_verified"]
-    ):
-
+    # Email verification is mandatory.
+    if not user["email_verified"]:
         raise HTTPException(
             status_code=403,
-            detail="Please verify your email or phone before logging in."
+            detail="Please verify your email before logging in."
         )
 
     public_user = {
@@ -606,7 +492,6 @@ def login(data: LoginRequest):
 
 @router.get("/me")
 def me(user=Depends(current_user)):
-
     return {
         "user": user
     }

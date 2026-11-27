@@ -74,8 +74,6 @@ export default function AuthGate({
     const [phone, setPhone] = useState("+91");
     const [password, setPassword] = useState("");
 
-    const [verifyVia, setVerifyVia] = useState<"email" | "phone">("email");
-
     const [otp, setOtp] = useState("");
 
     const [token, setToken] = useState(
@@ -86,6 +84,10 @@ export default function AuthGate({
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState("");
     const [message, setMessage] = useState("");
+
+    // =====================================================
+    // CHECK EXISTING SESSION
+    // =====================================================
 
     useEffect(() => {
         if (!token) {
@@ -114,11 +116,19 @@ export default function AuthGate({
         };
     }, [token]);
 
+    // =====================================================
+    // SAVE LOGIN SESSION
+    // =====================================================
+
     const saveSession = (data: AuthResponse) => {
         localStorage.setItem(TOKEN_KEY, data.access_token);
         setToken(data.access_token);
         setUser(data.user);
     };
+
+    // =====================================================
+    // FORM SUBMIT
+    // =====================================================
 
     const submit = async (event: FormEvent<HTMLFormElement>) => {
         event.preventDefault();
@@ -128,7 +138,13 @@ export default function AuthGate({
         setMessage("");
 
         try {
+
+            // =============================================
+            // REGISTER
+            // =============================================
+
             if (mode === "register") {
+
                 const cleanName = name.trim();
                 const cleanEmail = email.trim().toLowerCase();
                 const cleanPhone = phone.trim().replace(/[\s-]/g, "");
@@ -153,12 +169,12 @@ export default function AuthGate({
                     );
                 }
 
+                // Only email verification is supported.
                 await api("/api/auth/register", {
                     full_name: cleanName,
                     email: cleanEmail,
                     phone: cleanPhone,
                     password,
-                    verify_via: verifyVia,
                 });
 
                 setEmail(cleanEmail);
@@ -167,11 +183,20 @@ export default function AuthGate({
                 setMode("verify");
 
                 setMessage(
-                    `Verification code sent by ${verifyVia === "email" ? "Email" : "Phone"}.`
+                    "Verification code sent to your email address."
                 );
-            } else if (mode === "verify") {
+            }
+
+            // =============================================
+            // VERIFY EMAIL OTP
+            // =============================================
+
+            else if (mode === "verify") {
+
                 if (!/^\d{6}$/.test(otp)) {
-                    throw new Error("Enter a valid 6-digit verification code.");
+                    throw new Error(
+                        "Enter a valid 6-digit verification code."
+                    );
                 }
 
                 const data = await api("/api/auth/verify", {
@@ -180,7 +205,14 @@ export default function AuthGate({
                 });
 
                 saveSession(data);
-            } else {
+            }
+
+            // =============================================
+            // LOGIN
+            // =============================================
+
+            else {
+
                 const identifier = email.trim();
 
                 if (!identifier) {
@@ -198,16 +230,23 @@ export default function AuthGate({
 
                 saveSession(data);
             }
+
         } catch (e) {
+
             setError(
                 e instanceof Error
                     ? e.message
                     : "Something went wrong. Please try again."
             );
+
         } finally {
             setBusy(false);
         }
     };
+
+    // =====================================================
+    // LOGOUT
+    // =====================================================
 
     const logout = async () => {
         try {
@@ -217,6 +256,7 @@ export default function AuthGate({
         }
 
         localStorage.removeItem(TOKEN_KEY);
+
         setToken("");
         setUser(null);
         setPassword("");
@@ -225,6 +265,10 @@ export default function AuthGate({
         setMessage("");
     };
 
+    // =====================================================
+    // CHANGE LOGIN / REGISTER MODE
+    // =====================================================
+
     const changeMode = (nextMode: "login" | "register") => {
         setMode(nextMode);
         setError("");
@@ -232,6 +276,10 @@ export default function AuthGate({
         setPassword("");
         setOtp("");
     };
+
+    // =====================================================
+    // AUTHENTICATED USER
+    // =====================================================
 
     if (token && user) {
         return (
@@ -257,9 +305,18 @@ export default function AuthGate({
         );
     }
 
+    // =====================================================
+    // AUTHENTICATION SCREEN
+    // =====================================================
+
     return (
         <div className="mm-auth-shell">
-            <form className="mm-auth-card" onSubmit={submit}>
+
+            <form
+                className="mm-auth-card"
+                onSubmit={submit}
+            >
+
                 <div className="mm-auth-brand">
                     ◈ MarketMind AI
                 </div>
@@ -268,7 +325,7 @@ export default function AuthGate({
                     {mode === "register"
                         ? "Create your account"
                         : mode === "verify"
-                            ? "Verify your account"
+                            ? "Verify your email"
                             : "Welcome back"}
                 </h1>
 
@@ -276,8 +333,13 @@ export default function AuthGate({
                     Secure access to your MarketMind AI dashboard
                 </p>
 
+                {/* =======================================
+                    REGISTRATION FIELDS
+                ======================================= */}
+
                 {mode === "register" && (
                     <>
+
                         <label>
                             Full name
 
@@ -307,7 +369,7 @@ export default function AuthGate({
                         </label>
 
                         <label>
-                            Phone number (international format)
+                            Phone number
 
                             <input
                                 type="tel"
@@ -338,31 +400,22 @@ export default function AuthGate({
                             />
                         </label>
 
-                        <label>
-                            Verify using
+                        <p className="mm-auth-sub">
+                            <strong>Email verification required.</strong>
+                            <br />
+                            A 6-digit OTP will be sent to your email.
+                        </p>
 
-                            <select
-                                value={verifyVia}
-                                onChange={(e) =>
-                                    setVerifyVia(
-                                        e.target.value as "email" | "phone"
-                                    )
-                                }
-                            >
-                                <option value="email">
-                                    Email OTP
-                                </option>
-
-                                <option value="phone">
-                                    Phone OTP (Twilio)
-                                </option>
-                            </select>
-                        </label>
                     </>
                 )}
 
+                {/* =======================================
+                    LOGIN FIELDS
+                ======================================= */}
+
                 {mode === "login" && (
                     <>
+
                         <label>
                             Email or phone number
 
@@ -388,16 +441,19 @@ export default function AuthGate({
                                 placeholder="Enter your password"
                             />
                         </label>
+
                     </>
                 )}
 
+                {/* =======================================
+                    EMAIL OTP VERIFICATION
+                ======================================= */}
+
                 {mode === "verify" && (
                     <>
+
                         <p className="mm-auth-sub">
-                            Verification code sent using{" "}
-                            <strong>
-                                {verifyVia === "email" ? "Email" : "Phone"}
-                            </strong>.
+                            A verification code has been sent to your email.
                         </p>
 
                         <label>
@@ -413,7 +469,7 @@ export default function AuthGate({
                         </label>
 
                         <label>
-                            6-digit verification code
+                            6-digit email verification code
 
                             <input
                                 type="text"
@@ -435,10 +491,15 @@ export default function AuthGate({
                         </label>
 
                         <p className="mm-auth-sub">
-                            The code expires after 10 minutes.
+                            The verification code expires after 10 minutes.
                         </p>
+
                     </>
                 )}
+
+                {/* =======================================
+                    ERROR MESSAGE
+                ======================================= */}
 
                 {error && (
                     <div className="mm-auth-error">
@@ -446,11 +507,19 @@ export default function AuthGate({
                     </div>
                 )}
 
+                {/* =======================================
+                    SUCCESS MESSAGE
+                ======================================= */}
+
                 {message && (
                     <div className="mm-auth-message">
                         {message}
                     </div>
                 )}
+
+                {/* =======================================
+                    SUBMIT BUTTON
+                ======================================= */}
 
                 <button
                     className="mm-auth-submit"
@@ -460,19 +529,26 @@ export default function AuthGate({
                     {busy
                         ? "Please wait…"
                         : mode === "register"
-                            ? "Register & send OTP"
+                            ? "Register & send Email OTP"
                             : mode === "verify"
-                                ? "Verify & continue"
+                                ? "Verify Email & continue"
                                 : "Login"}
                 </button>
 
+                {/* =======================================
+                    MODE SWITCH
+                ======================================= */}
+
                 {mode !== "verify" ? (
+
                     <button
                         type="button"
                         className="mm-auth-link"
                         onClick={() =>
                             changeMode(
-                                mode === "login" ? "register" : "login"
+                                mode === "login"
+                                    ? "register"
+                                    : "login"
                             )
                         }
                     >
@@ -480,7 +556,9 @@ export default function AuthGate({
                             ? "New user? Create an account"
                             : "Already registered? Login"}
                     </button>
+
                 ) : (
+
                     <button
                         type="button"
                         className="mm-auth-link"
@@ -493,7 +571,9 @@ export default function AuthGate({
                     >
                         Back to registration
                     </button>
+
                 )}
+
             </form>
         </div>
     );

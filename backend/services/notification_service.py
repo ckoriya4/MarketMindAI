@@ -1,11 +1,8 @@
 
 import os
-import ssl
 import json
-import smtplib
 import threading
 import logging
-from email.message import EmailMessage
 
 import requests
 
@@ -16,281 +13,55 @@ log = logging.getLogger("marketmind.notifications")
 
 
 # =========================================================
-# EMAIL SMTP
+# RESEND EMAIL API
 # =========================================================
 
-def _smtp_send(to_email: str, subject: str, body: str):
-    host = os.getenv("SMTP_HOST", "smtp.gmail.com").strip()
-    user = os.getenv("SMTP_USERNAME", "").strip()
-    password = os.getenv("SMTP_PASSWORD", "").strip()
-    sender = os.getenv("SMTP_FROM", user).strip()
+RESEND_API_URL = "https://api.resend.com/emails"
 
-    if not all([host, user, password, sender]):
+
+def _resend_send(to_email: str, subject: str, body: str):
+    """
+    Send email using Resend HTTP API.
+    Gmail SMTP is not used.
+    """
+
+    api_key = os.getenv("RESEND_API_KEY", "").strip()
+    sender = os.getenv("RESEND_FROM_EMAIL", "").strip()
+
+    if not api_key:
+        raise RuntimeError("RESEND_API_KEY is missing.")
+
+    if not sender:
         raise RuntimeError(
-            "SMTP configuration missing. "
-            "Required: SMTP_HOST, SMTP_USERNAME, "
-            "SMTP_PASSWORD, SMTP_FROM."
+            "RESEND_FROM_EMAIL is missing. "
+            "Example: MarketMind AI <noreply@yourdomain.com>"
         )
 
-    port = int(os.getenv("SMTP_PORT", "465"))
-    timeout = int(os.getenv("SMTP_TIMEOUT", "30"))
-
-    message = EmailMessage()
-    message["Subject"] = subject
-    message["From"] = sender
-    message["To"] = to_email
-    message.set_content(body)
-
-    try:
-        if port == 465:
-            # Gmail SSL connection
-            context = ssl.create_default_context()
-
-            with smtplib.SMTP_SSL(
-                host,
-                port,
-                timeout=timeout,
-                context=context
-            ) as server:
-
-                server.login(user, password)
-                server.send_message(message)
-
-        else:
-            # STARTTLS connection, normally port 587
-            with smtplib.SMTP(
-                host,
-                port,
-                timeout=timeout
-            ) as server:
-
-                server.ehlo()
-                server.starttls(
-                    context=ssl.create_default_context()
-                )
-                server.ehlo()
-                server.login(user, password)
-                server.send_message(message)
-
-        log.info(
-            "Email successfully sent to %s",
-            to_email
-        )
-
-    except Exception:
-        log.exception(
-            "SMTP email delivery failed. Host=%s Port=%s Recipient=%s",
-            host,
-            port,
-            to_email
-        )
-        raise
-
-
-def send_email_otp(to_email: str, otp: str):
-    body = (
-        "Your MarketMind AI verification code is "
-        f"{otp}.\n\n"
-        "It expires in 10 minutes.\n"
-        "Do not share this code with anyone."
-    )
-
-    _smtp_send(
-        to_email,
-        "MarketMind AI verification code",
-        body
-    )
-
-
-# =========================================================
-# TWILIO VERIFY - REGISTRATION OTP
-# =========================================================
-
-def _get_twilio_verify_config():
-    account = os.getenv("TWILIO_ACCOUNT_SID", "").strip()
-    token = os.getenv("TWILIO_AUTH_TOKEN", "").strip()
-    service = os.getenv(
-        "TWILIO_VERIFY_SERVICE_SID", ""
-    ).strip()
-
-    if not all([account, token, service]):
-        raise RuntimeError(
-            "Twilio Verify configuration missing. "
-            "Required: TWILIO_ACCOUNT_SID, "
-            "TWILIO_AUTH_TOKEN, "
-            "TWILIO_VERIFY_SERVICE_SID."
-        )
-
-    return account, token, service
-
-
-def send_twilio_verification(phone: str, otp: str):
-    account, token, service = _get_twilio_verify_config()
-
-    channel = (
-        "whatsapp"
-        if os.getenv(
-            "TWILIO_VERIFY_WHATSAPP", "false"
-        ).lower() == "true"
-        else "sms"
-    )
-
-    url = (
-        f"https://verify.twilio.com/v2/Services/"
-        f"{service}/Verifications"
-    )
-
-    try:
-        response = requests.post(
-            url,
-            auth=(account, token),
-            data={
-                "To": phone,
-                "Channel": channel
-            },
-            timeout=30
-        )
-
-        if not response.ok:
-            log.error(
-                "Twilio OTP request failed. "
-                "Status=%s Response=%s",
-                response.status_code,
-                response.text[:1000]
-            )
-
-        response.raise_for_status()
-
-        log.info(
-            "Twilio verification initiated for %s via %s",
-            phone,
-            channel
-        )
-
-    except requests.RequestException:
-        log.exception(
-            "Twilio verification request failed for %s",
-            phone
-        )
-        raise
-
-
-def verify_twilio_code(phone: str, otp: str) -> bool:
-    account, token, service = _get_twilio_verify_config()
-
-    url = (
-        f"https://verify.twilio.com/v2/Services/"
-        f"{service}/VerificationCheck"
-    )
-
-    try:
-        response = requests.post(
-            url,
-            auth=(account, token),
-            data={
-                "To": phone,
-                "Code": otp
-            },
-            timeout=30
-        )
-
-        if not response.ok:
-            log.error(
-                "Twilio verification check failed. "
-                "Status=%s Response=%s",
-                response.status_code,
-                response.text[:1000]
-            )
-
-        response.raise_for_status()
-
-        return (
-            response.json().get("status") == "approved"
-        )
-
-    except requests.RequestException:
-        log.exception(
-            "Twilio OTP verification request failed for %s",
-            phone
-        )
-        raise
-
-
-# =========================================================
-# TWILIO SMS / WHATSAPP SIGNAL NOTIFICATIONS
-# =========================================================
-
-def send_twilio_message(
-    to: str,
-    body: str,
-    channel: str
-):
-    sid = os.getenv("TWILIO_ACCOUNT_SID", "").strip()
-    token = os.getenv("TWILIO_AUTH_TOKEN", "").strip()
-
-    if channel not in ("sms", "whatsapp"):
-        raise ValueError(
-            f"Unsupported Twilio channel: {channel}"
-        )
-
-    from_number = os.getenv(
-        "TWILIO_WHATSAPP_FROM"
-        if channel == "whatsapp"
-        else "TWILIO_SMS_FROM",
-        ""
-    ).strip()
-
-    if not all([sid, token, from_number]):
-        raise RuntimeError(
-            f"Twilio {channel} sender is not configured."
-        )
-
-    if channel == "whatsapp":
-        if not from_number.startswith("whatsapp:"):
-            from_number = "whatsapp:" + from_number
-
-        if not to.startswith("whatsapp:"):
-            to = "whatsapp:" + to
-
-    url = (
-        f"https://api.twilio.com/2010-04-01/"
-        f"Accounts/{sid}/Messages.json"
-    )
-
-    data = {
-        "From": from_number,
-        "To": to
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
     }
 
-    content_sid = (
-        os.getenv("TWILIO_WHATSAPP_CONTENT_SID", "").strip()
-        if channel == "whatsapp"
-        else ""
-    )
-
-    if content_sid:
-        data["ContentSid"] = content_sid
-        data["ContentVariables"] = json.dumps({
-            "1": body
-        })
-    else:
-        data["Body"] = body
+    payload = {
+        "from": sender,
+        "to": [to_email],
+        "subject": subject,
+        "text": body,
+    }
 
     try:
         response = requests.post(
-            url,
-            auth=(sid, token),
-            data=data,
-            timeout=30
+            RESEND_API_URL,
+            headers=headers,
+            json=payload,
+            timeout=30,
         )
 
         if not response.ok:
             log.error(
-                "Twilio message failed. "
-                "Channel=%s Status=%s Response=%s",
-                channel,
+                "Resend email failed. Status=%s Response=%s",
                 response.status_code,
-                response.text[:1000]
+                response.text[:1000],
             )
 
         response.raise_for_status()
@@ -298,19 +69,70 @@ def send_twilio_message(
         result = response.json()
 
         log.info(
-            "Twilio %s message sent. SID=%s",
-            channel,
-            result.get("sid")
+            "Email successfully sent using Resend. "
+            "Recipient=%s EmailID=%s",
+            to_email,
+            result.get("id"),
         )
 
-        return result.get("sid")
+        return result.get("id")
 
     except requests.RequestException:
         log.exception(
-            "Twilio %s message delivery failed",
-            channel
+            "Resend email delivery failed. Recipient=%s",
+            to_email,
         )
         raise
+
+
+# =========================================================
+# REGISTRATION EMAIL OTP
+# =========================================================
+
+def send_email_otp(to_email: str, otp: str):
+    body = (
+        "Hello,\n\n"
+        "Your MarketMind AI verification code is:\n\n"
+        f"{otp}\n\n"
+        "This OTP expires in 10 minutes.\n"
+        "Do not share this code with anyone.\n\n"
+        "Regards,\n"
+        "MarketMind AI"
+    )
+
+    return _resend_send(
+        to_email,
+        "MarketMind AI - Email Verification",
+        body,
+    )
+
+
+# =========================================================
+# TWILIO COMPATIBILITY FUNCTIONS
+# Registration and notifications currently use EMAIL ONLY.
+# These functions are retained in case another module imports them.
+# They are intentionally disabled.
+# =========================================================
+
+def send_twilio_verification(phone: str, otp: str):
+    raise RuntimeError(
+        "Phone OTP verification is currently disabled. "
+        "Only email verification is enabled."
+    )
+
+
+def verify_twilio_code(phone: str, otp: str) -> bool:
+    raise RuntimeError(
+        "Phone OTP verification is currently disabled. "
+        "Only email verification is enabled."
+    )
+
+
+def send_twilio_message(to: str, body: str, channel: str):
+    raise RuntimeError(
+        "SMS and WhatsApp notifications are currently disabled. "
+        "Only email notifications are enabled."
+    )
 
 
 # =========================================================
@@ -319,7 +141,7 @@ def send_twilio_message(
 
 def _signal_message(signal):
     fields = [
-        "MarketMind AI — New Signal",
+        "MarketMind AI - New Signal",
         f"Signal: {signal.get('action')}",
         f"Score: {signal.get('score')}%",
         f"Base Score: {signal.get('base_score')}%",
@@ -336,7 +158,7 @@ def _signal_message(signal):
             f"({signal.get('oi_change_pct')}%)"
         ),
         f"Signal ID: {signal.get('unique_id')}",
-        "Educational signal only; not investment advice."
+        "Educational signal only; not investment advice.",
     ]
 
     return "\n".join(str(x) for x in fields)
@@ -368,13 +190,14 @@ def enqueue_signal_notification(signal: dict):
             """,
             (
                 signal_id,
-                json.dumps(signal, default=str)
-            )
+                json.dumps(signal, default=str),
+            ),
         )
 
 
 # =========================================================
 # PROCESS ONE SIGNAL
+# EMAIL ONLY
 # =========================================================
 
 def _deliver_one():
@@ -409,7 +232,7 @@ def _deliver_one():
                 attempts = attempts + 1
             WHERE signal_id = %s
             """,
-            (event["signal_id"],)
+            (event["signal_id"],),
         )
 
         payload = event["payload"]
@@ -418,7 +241,7 @@ def _deliver_one():
     body = _signal_message(payload)
 
     # -----------------------------------------------------
-    # CREATE EMAIL DELIVERY ROWS
+    # CREATE EMAIL DELIVERY ROWS ONLY
     # -----------------------------------------------------
 
     with get_db_connection() as conn:
@@ -447,73 +270,11 @@ def _deliver_one():
                 channel
             ) DO NOTHING
             """,
-            (signal_id,)
-        )
-
-        # -------------------------------------------------
-        # CREATE SMS DELIVERY ROWS
-        # -------------------------------------------------
-
-        conn.execute(
-            """
-            INSERT INTO mm_notification_deliveries(
-                signal_id,
-                user_id,
-                channel,
-                destination,
-                status
-            )
-            SELECT
-                %s,
-                id,
-                'sms',
-                phone,
-                'pending'
-            FROM mm_users
-            WHERE is_active = TRUE
-              AND phone_verified = TRUE
-            ON CONFLICT (
-                signal_id,
-                user_id,
-                channel
-            ) DO NOTHING
-            """,
-            (signal_id,)
-        )
-
-        # -------------------------------------------------
-        # CREATE WHATSAPP DELIVERY ROWS
-        # -------------------------------------------------
-
-        conn.execute(
-            """
-            INSERT INTO mm_notification_deliveries(
-                signal_id,
-                user_id,
-                channel,
-                destination,
-                status
-            )
-            SELECT
-                %s,
-                id,
-                'whatsapp',
-                phone,
-                'pending'
-            FROM mm_users
-            WHERE is_active = TRUE
-              AND phone_verified = TRUE
-            ON CONFLICT (
-                signal_id,
-                user_id,
-                channel
-            ) DO NOTHING
-            """,
-            (signal_id,)
+            (signal_id,),
         )
 
     # -----------------------------------------------------
-    # LOAD PENDING DELIVERIES
+    # LOAD PENDING EMAIL DELIVERIES
     # -----------------------------------------------------
 
     with get_db_connection() as conn:
@@ -526,36 +287,27 @@ def _deliver_one():
                 destination
             FROM mm_notification_deliveries
             WHERE signal_id = %s
+              AND channel = 'email'
               AND status IN ('pending', 'retry')
               AND next_attempt_at <= NOW()
             ORDER BY id
             """,
-            (signal_id,)
+            (signal_id,),
         ).fetchall()
 
     # -----------------------------------------------------
-    # SEND NOTIFICATIONS
+    # SEND EMAIL NOTIFICATIONS
     # -----------------------------------------------------
 
     for item in deliveries:
 
         try:
 
-            if item["channel"] == "email":
-
-                _smtp_send(
-                    item["destination"],
-                    "MarketMind AI — New signal",
-                    body
-                )
-
-            else:
-
-                send_twilio_message(
-                    item["destination"],
-                    body,
-                    item["channel"]
-                )
+            _resend_send(
+                item["destination"],
+                "MarketMind AI - New Signal",
+                body,
+            )
 
             with get_db_connection() as conn:
 
@@ -567,14 +319,14 @@ def _deliver_one():
                         last_error = NULL
                     WHERE id = %s
                     """,
-                    (item["id"],)
+                    (item["id"],),
                 )
 
         except Exception as exc:
 
             log.exception(
-                "Notification delivery failed: %s",
-                item["id"]
+                "Email notification delivery failed: %s",
+                item["id"],
             )
 
             with get_db_connection() as conn:
@@ -591,8 +343,8 @@ def _deliver_one():
                     """,
                     (
                         str(exc)[:1000],
-                        item["id"]
-                    )
+                        item["id"],
+                    ),
                 )
 
     # -----------------------------------------------------
@@ -606,9 +358,10 @@ def _deliver_one():
             SELECT COUNT(*) AS n
             FROM mm_notification_deliveries
             WHERE signal_id = %s
+              AND channel = 'email'
               AND status IN ('pending', 'retry')
             """,
-            (signal_id,)
+            (signal_id,),
         ).fetchone()["n"]
 
         conn.execute(
@@ -629,8 +382,8 @@ def _deliver_one():
                 "sent" if remaining == 0 else "retry",
                 remaining,
                 remaining,
-                signal_id
-            )
+                signal_id,
+            ),
         )
 
     return True
@@ -656,7 +409,7 @@ class NotificationWorker:
         self._thread = threading.Thread(
             target=self._run,
             name="mm-notifications",
-            daemon=True
+            daemon=True,
         )
 
         self._thread.start()
