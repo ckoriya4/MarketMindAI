@@ -20,6 +20,7 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
+
 from .services.option_chart_service import get_option_chart_data
 
 
@@ -44,7 +45,6 @@ from .services.option_chain import (
     get_upcoming_expiries
 )
 
-# Historical option-chain PostgreSQL service.
 from .services.option_chain_history import (
     get_option_history_dates,
     get_historical_option_chain
@@ -76,7 +76,6 @@ from .services.kite_login import router as kite_login_router
 
 from .auth.router import router as auth_router
 
-# NEW: Trade Excel recorder.
 from .services.trade_excel_recorder import (
     router as trade_excel_router,
     trade_excel_recorder,
@@ -91,18 +90,20 @@ def get_allowed_origins():
 
     origins = {
         "http://localhost:5173",
-        "http://127.0.0.1:5173"
+        "http://127.0.0.1:5173",
     }
 
     frontend_url = os.getenv(
-        "FRONTEND_URL", ""
+        "FRONTEND_URL",
+        ""
     ).strip().rstrip("/")
 
     if frontend_url:
         origins.add(frontend_url)
 
     extra_origins = os.getenv(
-        "FRONTEND_ORIGINS", ""
+        "FRONTEND_ORIGINS",
+        ""
     )
 
     for origin in extra_origins.split(","):
@@ -128,6 +129,7 @@ async def lifespan(app: FastAPI):
     try:
         recorder.start()
         print("[MarketMind] OI session recorder started.")
+
     except Exception as exc:
         print(
             "[MarketMind] Recorder startup warning:",
@@ -145,7 +147,6 @@ async def lifespan(app: FastAPI):
                 "[MarketMind] PostgreSQL Kite session restored."
             )
 
-            # Start the shared Kite WebSocket.
             started = kite_stream.start(
                 kite_manager.api_key,
                 kite_manager.access_token
@@ -172,9 +173,15 @@ async def lifespan(app: FastAPI):
 
     # Start stock OI collector.
     try:
+
         stock_oi_collector.start()
-        print("[MarketMind] Stock OI collector started.")
+
+        print(
+            "[MarketMind] Stock OI collector started."
+        )
+
     except Exception as exc:
+
         print(
             "[MarketMind] Stock OI collector startup warning:",
             str(exc)
@@ -182,20 +189,33 @@ async def lifespan(app: FastAPI):
 
     # Start durable signal-notification delivery worker.
     try:
-        from .services.notification_service import notification_worker
-        notification_worker.start()
-        print("[MarketMind] Notification worker started.")
-    except Exception as exc:
-        print("[MarketMind] Notification worker startup warning:", str(exc))
 
-    # NEW: Start background Excel signal recorder.
-    # It runs independently of the frontend/browser.
+        from .services.notification_service import notification_worker
+
+        notification_worker.start()
+
+        print(
+            "[MarketMind] Notification worker started."
+        )
+
+    except Exception as exc:
+
+        print(
+            "[MarketMind] Notification worker startup warning:",
+            str(exc)
+        )
+
+    # Start background Excel signal recorder.
     try:
+
         trade_excel_recorder.start()
+
         print(
             "[MarketMind] Trade Excel recorder started."
         )
+
     except Exception as exc:
+
         print(
             "[MarketMind] Trade Excel recorder startup warning:",
             str(exc)
@@ -207,24 +227,39 @@ async def lifespan(app: FastAPI):
 
     finally:
 
-        print("[MarketMind] Stopping dashboard services...")
+        print(
+            "[MarketMind] Stopping dashboard services..."
+        )
 
         # Stop notification delivery worker.
         try:
+
             from .services.notification_service import notification_worker
-            await asyncio.to_thread(notification_worker.stop)
+
+            await asyncio.to_thread(
+                notification_worker.stop
+            )
+
         except Exception as exc:
-            print("[MarketMind] Notification worker shutdown warning:", str(exc))
+
+            print(
+                "[MarketMind] Notification worker shutdown warning:",
+                str(exc)
+            )
 
         # Stop Excel recorder.
         try:
+
             await asyncio.to_thread(
                 trade_excel_recorder.stop
             )
+
             print(
                 "[MarketMind] Trade Excel recorder stopped."
             )
+
         except Exception as exc:
+
             print(
                 "[MarketMind] Trade Excel recorder shutdown error:",
                 str(exc)
@@ -232,8 +267,11 @@ async def lifespan(app: FastAPI):
 
         # Stop Kite WebSocket.
         try:
+
             kite_stream.stop()
+
         except Exception as exc:
+
             print(
                 "[KiteStream] Shutdown error:",
                 str(exc)
@@ -241,8 +279,11 @@ async def lifespan(app: FastAPI):
 
         # Stop stock OI collector.
         try:
+
             stock_oi_collector.stop()
+
         except Exception as exc:
+
             print(
                 "[MarketMind] Collector shutdown error:",
                 str(exc)
@@ -250,14 +291,21 @@ async def lifespan(app: FastAPI):
 
         # Stop existing OI session recorder.
         try:
-            await asyncio.to_thread(recorder.stop)
+
+            await asyncio.to_thread(
+                recorder.stop
+            )
+
         except Exception as exc:
+
             print(
                 "[MarketMind] Recorder shutdown error:",
                 str(exc)
             )
 
-        print("[MarketMind] Dashboard stopped.")
+        print(
+            "[MarketMind] Dashboard stopped."
+        )
 
 
 # ---------------------------------------------------------
@@ -268,19 +316,6 @@ app = FastAPI(
     title="MarketMind AI - Trading Intelligence Backend",
     version="1.0.0",
     lifespan=lifespan
-)
-
-
-# ---------------------------------------------------------
-# CORS
-# ---------------------------------------------------------
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=get_allowed_origins(),
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
 )
 
 
@@ -298,10 +333,11 @@ app.include_router(weighted_setup_router)
 app.include_router(live_crude_router)
 app.include_router(trade_setup_router)
 app.include_router(oi_reference_router)
+
 app.include_router(kite_login_router)
 app.include_router(auth_router)
 
-# NEW: Excel recorder configuration API.
+# Excel recorder configuration API.
 app.include_router(trade_excel_router)
 
 
@@ -382,6 +418,7 @@ def constituents():
                 for member in members
             }) != 50
         ):
+
             raise ValueError(
                 "Expected 50 unique symbols"
             )
@@ -635,6 +672,7 @@ def option_chart_candles(
     count: int = Query(1000, ge=20, le=1000),
     session: bool = Query(True)
 ):
+
     return get_option_chart_data(
         symbol=symbol,
         expiry=expiry,
@@ -712,8 +750,6 @@ def chart_live(
             "Instrument token unavailable"
         )
 
-    # Remember subscription even if WebSocket is not
-    # connected yet. It will subscribe on connection.
     kite_stream.subscribe(token)
 
     tick = kite_stream.get_tick(token)
@@ -724,6 +760,30 @@ def chart_live(
         "instrument": data.get("instrument"),
         "quote_key": data.get("quote_key")
     }
+
+
+# ---------------------------------------------------------
+# GLOBAL CORS MIDDLEWARE
+# ---------------------------------------------------------
+
+allowed_origins = get_allowed_origins()
+
+print(
+    "[CORS] Allowed origins:",
+    allowed_origins
+)
+
+# Wrap the complete FastAPI application.
+# CORS headers will also be applied to error responses.
+app = CORSMiddleware(
+    app=app,
+    allow_origins=allowed_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+    expose_headers=["*"],
+    max_age=600
+)
 
 
 # ---------------------------------------------------------
