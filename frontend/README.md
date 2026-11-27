@@ -177,3 +177,60 @@ KiteLoginButton.tsx: UI button to initiate the Kite authentication flow.
 Backend: Periodically polls or streams market data from Kite Connect or NSE India.
 Analysis Engines: Compute Greeks, moving averages, PCR, and confluence scores in Python.
 Frontend: Queries /api/market/quotes, /api/options/chain, and /api/chart/candles to render the real-time trading dashboard.
+
+
+# MarketMind AI — Registration, Login & Signal Notifications
+
+## What this package changes
+- Adds registration, email/phone verification, login, JWT-protected dashboard access.
+- Uses your existing PostgreSQL connection helper (`backend/services/database.py`).
+- Sends email through SMTP and SMS/WhatsApp through Twilio.
+- Queues a notification only after both Excel writes succeed for a *new Signal Entries row*.
+- Uses the recorder's existing `unique_id` to prevent duplicate signal events and per-user/channel deliveries.
+- Does not change score thresholds, signal selection, LTP tracking, or Excel workbook layout.
+
+A user verifies either email OR phone. Only verified destinations can receive their matching channels:
+- email verified → email
+- phone verified → SMS + WhatsApp
+A user who verifies only email cannot receive SMS/WhatsApp until phone verification is separately added; likewise phone-only users will not receive email. This prevents sending to unverified addresses/numbers.
+
+## Install
+1. Copy these files into your project, preserving paths:
+   - `backend/auth/`
+   - `backend/services/notification_service.py`
+   - `backend/migrations/001_auth_notifications.sql`
+   - replace `backend/main.py` and `backend/services/trade_excel_recorder.py` with the included integrated versions
+   - `frontend/src/AuthGate.tsx`, `frontend/src/AuthGate.css`
+   - replace `frontend/src/App.tsx` with the included wrapped version
+2. Keep your current `backend/services/database.py` unchanged.
+3. Add the two lines from `backend/requirements-auth.txt` to the existing backend requirements, then install:
+   `pip install -r requirements.txt`
+4. Run `001_auth_notifications.sql` once on the same PostgreSQL database referenced by `DATABASE_URL`.
+5. Add values from `.env.auth.example` to `backend/.env`. Generate JWT_SECRET and OTP_PEPPER with cryptographically random values; do not commit `.env`.
+6. Ensure the frontend `apiUrl` config already points to this FastAPI backend (the existing dashboard uses the same helper).
+
+## Twilio setup
+- Configure a Twilio Verify Service for phone OTP.
+- SMS sending requires an approved/active Twilio sender for the destination country.
+- WhatsApp requires an enabled WhatsApp sender. For business-initiated notifications outside the 24-hour customer-service window, use an approved WhatsApp template and set `TWILIO_WHATSAPP_CONTENT_SID`. The template must accept the single variable used for the signal text, or adapt the `ContentVariables` mapping to the template you approve.
+- Obtain user opt-in before sending WhatsApp/SMS. India SMS may require DLT registration/templates and compliant sender configuration.
+- `TWILIO_VERIFY_WHATSAPP=true` only works if WhatsApp is enabled as a channel for your Twilio Verify Service.
+
+## Email setup
+For Gmail, use an App Password with 2-Step Verification enabled. For production, use a transactional SMTP account and SPF/DKIM/DMARC.
+
+## Run
+Start FastAPI as usual:
+`python -m uvicorn backend.main:app --reload`
+
+Start Vite as usual:
+`npm run dev`
+
+## Important operational notes
+- The dashboard is protected by the login gate. Existing dashboard code is retained.
+- Login identifier field accepts email or phone (international format).
+- OTP expires in 10 minutes; incorrect attempts are limited to five per registration.
+- JWT session expires according to ACCESS_TOKEN_MINUTES.
+- Notification delivery is asynchronous and retried. Check backend logs and the `mm_notification_deliveries` table for failures.
+- The worker runs in each FastAPI process. For a multi-worker/multi-instance production deployment, run a single dedicated worker process or add a stronger lease/claim implementation before scaling out.
+- This is a first implementation; before public production exposure add rate limiting, CSRF strategy if cookies are adopted, password reset, account deletion, resend OTP cooldown, audit logs, and verified contact-change flows.
