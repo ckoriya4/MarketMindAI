@@ -678,6 +678,17 @@ def process_card(action, card, config, expiry, quote_time):
         # Sheet 2: Initial LTP baseline.
         append_initial_ltp(signal)
 
+        # Queue user notifications only after both Excel writes succeed.
+        # Delivery is asynchronous and idempotent by signal unique_id.
+        try:
+            from .notification_service import enqueue_signal_notification
+            enqueue_signal_notification(signal)
+        except Exception as exc:
+            print(
+                "[TradeExcelRecorder] Notification enqueue warning:",
+                str(exc)
+            )
+
         state = {
             "active": True,
             "last_score": round(score, 2),

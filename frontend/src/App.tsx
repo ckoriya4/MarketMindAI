@@ -26,6 +26,7 @@ import IndicatorCandleChart, {
 } from "./IndicatorCandleChart";
 import { apiUrl } from "./config/api";
 import CrossoverSignalPanel from "./CrossoverSignalPanel";
+import AuthGate from "./AuthGate";
 
 const navItems = [
   "Dashboard",
@@ -113,7 +114,7 @@ function PanelTitle({
   );
 }
 
-export default function App() {
+function DashboardApp() {
   const [active, setActive] = useState("Dashboard");
   const [search, setSearch] = useState("");
   const [timeframe, setTimeframe] = useState("15m");
@@ -1399,4 +1400,8 @@ export default function App() {
       )}
     </div>
   );
+}
+
+export default function App() {
+  return <AuthGate><DashboardApp /></AuthGate>;
 }

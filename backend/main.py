@@ -74,6 +74,8 @@ from .services.oi_percent_reference import router as oi_reference_router
 from .services.direct_alerts import install_direct_alerts
 from .services.kite_login import router as kite_login_router
 
+from .auth.router import router as auth_router
+
 # NEW: Trade Excel recorder.
 from .services.trade_excel_recorder import (
     router as trade_excel_router,
@@ -178,6 +180,14 @@ async def lifespan(app: FastAPI):
             str(exc)
         )
 
+    # Start durable signal-notification delivery worker.
+    try:
+        from .services.notification_service import notification_worker
+        notification_worker.start()
+        print("[MarketMind] Notification worker started.")
+    except Exception as exc:
+        print("[MarketMind] Notification worker startup warning:", str(exc))
+
     # NEW: Start background Excel signal recorder.
     # It runs independently of the frontend/browser.
     try:
@@ -198,6 +208,13 @@ async def lifespan(app: FastAPI):
     finally:
 
         print("[MarketMind] Stopping dashboard services...")
+
+        # Stop notification delivery worker.
+        try:
+            from .services.notification_service import notification_worker
+            await asyncio.to_thread(notification_worker.stop)
+        except Exception as exc:
+            print("[MarketMind] Notification worker shutdown warning:", str(exc))
 
         # Stop Excel recorder.
         try:
@@ -282,6 +299,7 @@ app.include_router(live_crude_router)
 app.include_router(trade_setup_router)
 app.include_router(oi_reference_router)
 app.include_router(kite_login_router)
+app.include_router(auth_router)
 
 # NEW: Excel recorder configuration API.
 app.include_router(trade_excel_router)
